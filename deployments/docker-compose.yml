@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: eventix-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - ${DB_PORT}:${DB_PORT}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    #networks:
+     # - eventix-network
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: eventix-postgres-test
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER_TEST}
+      POSTGRES_PASSWORD: ${DB_PASSWORD_TEST}
+      POSTGRES_DB: ${DB_NAME_TEST}
+    ports:
+      - ${DB_PORT_TEST}:${DB_PORT}
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER_TEST}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    #networks:
+     # - eventix-network 
+  #auth:
+    #build:
+      #context: ..
+      #dockerfile: services/auth/Dockerfile
+    #container_name: eventix-auth
+    #restart: unless-stopped
+    #depends_on:
+      #postgres:
+        #condition: service_healthy
+    #ports:
+      #- ${AUTH_GRPC_PORT}:${AUTH_GRPC_PORT}
+    #env_file:
+      #- ../.env
+volumes:
+  postgres_data:
+  postgres_test_data:

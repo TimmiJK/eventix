@@ -1,0 +1,11 @@
+.git
+.gitignore
+README.md
+.env
+*.md
+Dockerfile
+docker-compose.yml
+**/bin/
+**/tmp/
+**/test/
+**/*_test.go
