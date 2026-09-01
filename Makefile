@@ -16,14 +16,14 @@ docker-down:
 docker-logs:
 	sudo docker compose --env-file .env -f deployments/docker-compose.yml logs -f
 
-proto-auth:
+proto-%:
 	protoc \
-		--proto_path=proto/auth \
-		--go_out=proto/auth/pb \
+		--proto_path=proto/$* \
+		--go_out=proto/$*/pb \
 		--go_opt=paths=source_relative \
-		--go-grpc_out=proto/auth/pb \
+		--go-grpc_out=proto/$*/pb \
 		--go-grpc_opt=paths=source_relative \
-		proto/auth/auth.proto
+		proto/$*/$*.proto
 
 migrate-up:
 	migrate -path migrations -database "postgresql://${DB_NAME}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable" up
@@ -41,8 +41,8 @@ migrate-create:
 	@test -n "$(NAME)" || (echo "Ошибка: укажи NAME=название" && exit 1)
 	migrate create -ext sql -dir migrations -seq $(NAME)
 
-test-covarage:
-	cd services/auth/internal/service && \
+test-coverage-%:
+	cd services/$*/internal/service && \
 	go test -v -race -coverprofile=cover.out && go tool cover -html=cover.out -o cover.html
 
 run-%:
