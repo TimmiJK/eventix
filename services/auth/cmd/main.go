@@ -36,13 +36,8 @@ func main() {
 		log.Println(" .env file not found, using environment variables")
 	}
 
-	logPath := os.Getenv("LOG_FILE_PATH_AUTH")
-	if logPath == "" {
-		logPath = "logs/auth-service.log"
-	}
-
 	logWriter := &lumberjack.Logger{
-		Filename:   logPath,
+		Filename:   "services/auth/logs/auth-service.log",
 		MaxSize:    100,
 		MaxBackups: 3,
 		MaxAge:     28,
