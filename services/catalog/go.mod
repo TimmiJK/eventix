@@ -5,11 +5,13 @@ go 1.26.0
 require (
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
+	github.com/stretchr/testify v1.12.1
 	google.golang.org/grpc v1.83.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
 require (
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
