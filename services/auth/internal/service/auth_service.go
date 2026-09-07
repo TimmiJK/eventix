@@ -14,7 +14,7 @@ import (
 	jwtTokens "eventix/pkg/jwt"
 	pb "eventix/proto/auth/pb"
 
-	"eventix/services/auth/internal/models"
+	"eventix/services/auth/internal/repository"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/argon2"
@@ -23,7 +23,7 @@ import (
 )
 
 type AuthManager struct {
-	repo                   Repository
+	repo                   repository.Repository
 	logger                 *slog.Logger
 	jwtSecret              string
 	accessTokenExperation  time.Duration
@@ -35,15 +35,6 @@ type AuthTokens struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresIn    int64
-}
-
-type Repository interface {
-	CreateUser(ctx context.Context, email string, name string, role string, password []byte) (uuid.UUID, error)
-	GetUserByEmail(ctx context.Context, email string) (models.User, error)
-	GetUserByID(ctx context.Context, userID uuid.UUID) (models.User, error)
-	SaveRefreshToken(ctx context.Context, userID uuid.UUID, tokenID string, tokenExpTime time.Duration) error
-	IsRefreshTokenValid(ctx context.Context, tokenID string, userID uuid.UUID) (bool, error)
-	RevokeRefreshToken(ctx context.Context, tokenID string, userID uuid.UUID) error
 }
 
 type Argon2Params struct {
@@ -62,7 +53,7 @@ var defaultArgon2Params = Argon2Params{
 	KeyLength:   32,
 }
 
-func NewAuthManager(repo Repository, logger *slog.Logger, secret string, accessTokenExp time.Duration, refreshTokenExp time.Duration) *AuthManager {
+func NewAuthManager(repo repository.Repository, logger *slog.Logger, secret string, accessTokenExp time.Duration, refreshTokenExp time.Duration) *AuthManager {
 	return &AuthManager{
 		repo:                   repo,
 		logger:                 logger,
@@ -268,9 +259,58 @@ func (m *AuthManager) Logout(ctx context.Context, req *pb.LogoutRequest) (*pb.Lo
 	err = m.repo.RevokeRefreshToken(ctx, claims.TokenID, userID)
 	if err != nil {
 		m.logger.Error("Logout failed: database error while revoking token", "user_id", userID.String(), "error", err)
-		return nil, status.Errorf(codes.Internal, "failed to revoke token: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to revoke token")
 	}
 
 	m.logger.Info("Logout successful", "user_id", userID.String())
 	return &pb.LogoutResponse{Success: true}, nil
+}
+
+func (m *AuthManager) ValidateToken(ctx context.Context, req *pb.ValidateTokenRequest) (*pb.ValidateTokenResponse, error) {
+	m.logger.Info("Token validation request")
+
+	accessClaims, err := jwtTokens.ValidateAccessToken(req.Token, m.jwtSecret)
+	if err == nil {
+		m.logger.Info("Access token validated", "user_id", accessClaims.UserID)
+		return &pb.ValidateTokenResponse{
+			IsValid: true,
+			UserId:  accessClaims.UserID,
+			Email:   accessClaims.Email,
+			Role:    accessClaims.Role,
+		}, nil
+	}
+
+	refreshClaims, refreshErr := jwtTokens.ValidateRefreshToken(req.Token, m.jwtSecret)
+	if refreshErr == nil {
+		userID, parseErr := uuid.Parse(refreshClaims.UserID)
+		if parseErr != nil {
+			m.logger.Error("Failed to parse user ID from refresh token", "error", parseErr)
+			return &pb.ValidateTokenResponse{IsValid: false}, status.Error(codes.Internal, "invalid user id")
+		}
+
+		isValid, dbErr := m.repo.IsRefreshTokenValid(ctx, refreshClaims.TokenID, userID)
+		if dbErr != nil || !isValid {
+			m.logger.Warn("Refresh token is revoked", "user_id", refreshClaims.UserID)
+			return &pb.ValidateTokenResponse{IsValid: false}, status.Errorf(codes.Internal, "token was revoked or invalid")
+		}
+
+		user, userErr := m.repo.GetUserByID(ctx, userID)
+		if userErr != nil {
+			m.logger.Error("Failed to get user by ID", "error", userErr)
+			return &pb.ValidateTokenResponse{IsValid: false}, status.Error(codes.Internal, "failed to get user")
+		}
+
+		m.logger.Info("Refresh token validated", "user_id", refreshClaims.UserID)
+		return &pb.ValidateTokenResponse{
+			IsValid: true,
+			UserId:  refreshClaims.UserID,
+			Email:   user.Email,
+			Role:    user.Role,
+		}, nil
+	}
+
+	m.logger.Warn("Token validation failed", "access_token_error", err, "refresh_token_error", refreshErr)
+	return &pb.ValidateTokenResponse{
+		IsValid: false,
+	}, status.Error(codes.Unauthenticated, "invalid token")
 }

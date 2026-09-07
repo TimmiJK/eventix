@@ -13,6 +13,15 @@ import (
 	//pgx "github.com/jackc/pgx/v5"
 )
 
+type Repository interface {
+	CreateUser(ctx context.Context, email string, name string, role string, password []byte) (uuid.UUID, error)
+	GetUserByEmail(ctx context.Context, email string) (models.User, error)
+	GetUserByID(ctx context.Context, userID uuid.UUID) (models.User, error)
+	SaveRefreshToken(ctx context.Context, userID uuid.UUID, tokenID string, tokenExpTime time.Duration) error
+	IsRefreshTokenValid(ctx context.Context, tokenID string, userID uuid.UUID) (bool, error)
+	RevokeRefreshToken(ctx context.Context, tokenID string, userID uuid.UUID) error
+}
+
 type PostgresStorage struct {
 	db *sql.DB
 }
