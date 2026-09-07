@@ -30,19 +30,15 @@ jobs:
             catalog:
               - 'services/catalog/**'
               - 'proto/catalog/**'
-              - 'cmd/catalog/**'
             auth:
               - 'services/auth/**'
               - 'proto/auth/**'
-              - 'cmd/auth/**'
             booking:
               - 'services/booking/**'
               - 'proto/booking/**'
-              - 'cmd/booking/**'
             notification:
               - 'services/notification/**'
               - 'proto/notification/**'
-              - 'cmd/notification/**'
             shared:
               - 'pkg/**'
               - 'go.mod'
@@ -101,9 +97,10 @@ jobs:
         run: go vet ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: latest
+          working-directory: ${{ matrix.dir }}
           args: --timeout=5m
 
   build:
@@ -178,14 +175,16 @@ jobs:
             echo "No migrations directory for $SERVICE yet"
           fi
 
-      - name: Run tests
+      - name: Run service tests
         run: |
           SERVICE="${{ matrix.service }}"
 
-          if [ -d "services/$SERVICE" ]; then
-            go test -race -count=1 ./services/$SERVICE/...
+          if [ -f "services/$SERVICE/go.mod" ]; then
+            echo "== testing services/$SERVICE"
+            cd "services/$SERVICE"
+            go test -race -count=1 ./...
           else
-            echo "services/$SERVICE does not exist yet, skipping"
+            echo "services/$SERVICE has no go.mod yet, skipping tests"
           fi
 
   ci-success:

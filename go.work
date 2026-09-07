@@ -1,0 +1,10 @@
+go 1.26.0
+
+use (
+	.
+	//./gateway
+	./services/auth
+	//./services/booking
+	./services/catalog
+	//./services/notification
+)
