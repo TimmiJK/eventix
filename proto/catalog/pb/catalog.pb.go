@@ -9,6 +9,7 @@ package pb
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	fieldmaskpb "google.golang.org/protobuf/types/known/fieldmaskpb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -490,6 +491,7 @@ type UpdateEventRequest struct {
 	EventDate     string                 `protobuf:"bytes,5,opt,name=event_date,json=eventDate,proto3" json:"event_date,omitempty"`
 	TotalSeats    int32                  `protobuf:"varint,6,opt,name=total_seats,json=totalSeats,proto3" json:"total_seats,omitempty"`
 	Price         float64                `protobuf:"fixed64,7,opt,name=price,proto3" json:"price,omitempty"`
+	UpdateMask    *fieldmaskpb.FieldMask `protobuf:"bytes,8,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -571,6 +573,13 @@ func (x *UpdateEventRequest) GetPrice() float64 {
 		return x.Price
 	}
 	return 0
+}
+
+func (x *UpdateEventRequest) GetUpdateMask() *fieldmaskpb.FieldMask {
+	if x != nil {
+		return x.UpdateMask
+	}
+	return nil
 }
 
 type UpdateEventResponse struct {
@@ -709,7 +718,7 @@ var File_catalog_proto protoreflect.FileDescriptor
 
 const file_catalog_proto_rawDesc = "" +
 	"\n" +
-	"\rcatalog.proto\x12\acatalog\"\xa2\x02\n" +
+	"\rcatalog.proto\x12\acatalog\x1a google/protobuf/field_mask.proto\"\xa2\x02\n" +
 	"\x05Event\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -750,7 +759,7 @@ const file_catalog_proto_rawDesc = "" +
 	"totalSeats\x12\x14\n" +
 	"\x05price\x18\x06 \x01(\x01R\x05price\";\n" +
 	"\x13CreateEventResponse\x12$\n" +
-	"\x05event\x18\x01 \x01(\v2\x0e.catalog.EventR\x05event\"\xd3\x01\n" +
+	"\x05event\x18\x01 \x01(\v2\x0e.catalog.EventR\x05event\"\x90\x02\n" +
 	"\x12UpdateEventRequest\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -760,7 +769,9 @@ const file_catalog_proto_rawDesc = "" +
 	"event_date\x18\x05 \x01(\tR\teventDate\x12\x1f\n" +
 	"\vtotal_seats\x18\x06 \x01(\x05R\n" +
 	"totalSeats\x12\x14\n" +
-	"\x05price\x18\a \x01(\x01R\x05price\";\n" +
+	"\x05price\x18\a \x01(\x01R\x05price\x12;\n" +
+	"\vupdate_mask\x18\b \x01(\v2\x1a.google.protobuf.FieldMaskR\n" +
+	"updateMask\";\n" +
 	"\x13UpdateEventResponse\x12$\n" +
 	"\x05event\x18\x01 \x01(\v2\x0e.catalog.EventR\x05event\"/\n" +
 	"\x12DeleteEventRequest\x12\x19\n" +
@@ -789,38 +800,40 @@ func file_catalog_proto_rawDescGZIP() []byte {
 
 var file_catalog_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_catalog_proto_goTypes = []any{
-	(*Event)(nil),               // 0: catalog.Event
-	(*GetEventRequest)(nil),     // 1: catalog.GetEventRequest
-	(*GetEventResponse)(nil),    // 2: catalog.GetEventResponse
-	(*ListEventsRequest)(nil),   // 3: catalog.ListEventsRequest
-	(*ListEventsResponse)(nil),  // 4: catalog.ListEventsResponse
-	(*CreateEventRequest)(nil),  // 5: catalog.CreateEventRequest
-	(*CreateEventResponse)(nil), // 6: catalog.CreateEventResponse
-	(*UpdateEventRequest)(nil),  // 7: catalog.UpdateEventRequest
-	(*UpdateEventResponse)(nil), // 8: catalog.UpdateEventResponse
-	(*DeleteEventRequest)(nil),  // 9: catalog.DeleteEventRequest
-	(*DeleteEventResponse)(nil), // 10: catalog.DeleteEventResponse
+	(*Event)(nil),                 // 0: catalog.Event
+	(*GetEventRequest)(nil),       // 1: catalog.GetEventRequest
+	(*GetEventResponse)(nil),      // 2: catalog.GetEventResponse
+	(*ListEventsRequest)(nil),     // 3: catalog.ListEventsRequest
+	(*ListEventsResponse)(nil),    // 4: catalog.ListEventsResponse
+	(*CreateEventRequest)(nil),    // 5: catalog.CreateEventRequest
+	(*CreateEventResponse)(nil),   // 6: catalog.CreateEventResponse
+	(*UpdateEventRequest)(nil),    // 7: catalog.UpdateEventRequest
+	(*UpdateEventResponse)(nil),   // 8: catalog.UpdateEventResponse
+	(*DeleteEventRequest)(nil),    // 9: catalog.DeleteEventRequest
+	(*DeleteEventResponse)(nil),   // 10: catalog.DeleteEventResponse
+	(*fieldmaskpb.FieldMask)(nil), // 11: google.protobuf.FieldMask
 }
 var file_catalog_proto_depIdxs = []int32{
 	0,  // 0: catalog.GetEventResponse.event:type_name -> catalog.Event
 	0,  // 1: catalog.ListEventsResponse.events:type_name -> catalog.Event
 	0,  // 2: catalog.CreateEventResponse.event:type_name -> catalog.Event
-	0,  // 3: catalog.UpdateEventResponse.event:type_name -> catalog.Event
-	1,  // 4: catalog.CatalogService.GetEvent:input_type -> catalog.GetEventRequest
-	3,  // 5: catalog.CatalogService.ListEvents:input_type -> catalog.ListEventsRequest
-	5,  // 6: catalog.CatalogService.CreateEvent:input_type -> catalog.CreateEventRequest
-	7,  // 7: catalog.CatalogService.UpdateEvent:input_type -> catalog.UpdateEventRequest
-	9,  // 8: catalog.CatalogService.DeleteEvent:input_type -> catalog.DeleteEventRequest
-	2,  // 9: catalog.CatalogService.GetEvent:output_type -> catalog.GetEventResponse
-	4,  // 10: catalog.CatalogService.ListEvents:output_type -> catalog.ListEventsResponse
-	6,  // 11: catalog.CatalogService.CreateEvent:output_type -> catalog.CreateEventResponse
-	8,  // 12: catalog.CatalogService.UpdateEvent:output_type -> catalog.UpdateEventResponse
-	10, // 13: catalog.CatalogService.DeleteEvent:output_type -> catalog.DeleteEventResponse
-	9,  // [9:14] is the sub-list for method output_type
-	4,  // [4:9] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	11, // 3: catalog.UpdateEventRequest.update_mask:type_name -> google.protobuf.FieldMask
+	0,  // 4: catalog.UpdateEventResponse.event:type_name -> catalog.Event
+	1,  // 5: catalog.CatalogService.GetEvent:input_type -> catalog.GetEventRequest
+	3,  // 6: catalog.CatalogService.ListEvents:input_type -> catalog.ListEventsRequest
+	5,  // 7: catalog.CatalogService.CreateEvent:input_type -> catalog.CreateEventRequest
+	7,  // 8: catalog.CatalogService.UpdateEvent:input_type -> catalog.UpdateEventRequest
+	9,  // 9: catalog.CatalogService.DeleteEvent:input_type -> catalog.DeleteEventRequest
+	2,  // 10: catalog.CatalogService.GetEvent:output_type -> catalog.GetEventResponse
+	4,  // 11: catalog.CatalogService.ListEvents:output_type -> catalog.ListEventsResponse
+	6,  // 12: catalog.CatalogService.CreateEvent:output_type -> catalog.CreateEventResponse
+	8,  // 13: catalog.CatalogService.UpdateEvent:output_type -> catalog.UpdateEventResponse
+	10, // 14: catalog.CatalogService.DeleteEvent:output_type -> catalog.DeleteEventResponse
+	10, // [10:15] is the sub-list for method output_type
+	5,  // [5:10] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_catalog_proto_init() }
