@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package catalog;
 
+import "google/protobuf/field_mask.proto";
+
 option go_package = "/eventix/proto/catalog/pb";
 
 message Event {
@@ -59,6 +61,7 @@ message UpdateEventRequest {
     string event_date = 5;
     int32 total_seats = 6;
     double price = 7;
+    google.protobuf.FieldMask update_mask = 8;
 }
 
 message UpdateEventResponse {

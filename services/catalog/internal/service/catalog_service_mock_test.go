@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 type MockRepository struct {
@@ -852,17 +853,35 @@ func TestCatalogManager_CreateEvent_Success(t *testing.T) {
 }
 
 func TestCatalogManager_UpdateEvent_InvalidDates(t *testing.T) {
-	mockRepo := &MockRepository{}
+	eventID := uuid.New()
+	mockRepo := &MockRepository{
+		MockGetEventByID: func(ctx context.Context, eventID uuid.UUID) (models.Event, error) {
+			return models.Event{
+				ID:             eventID,
+				Title:          "Existing Event",
+				Description:    "Existing Description",
+				Venue:          "Existing Venue",
+				EventDate:      time.Date(2030, 1, 1, 20, 0, 0, 0, time.UTC),
+				TotalSeats:     100,
+				AvailableSeats: 100,
+				Price:          50.0,
+			}, nil
+		},
+	}
 	logger := slog.New(slog.DiscardHandler)
 	manager := NewCatalogManager(mockRepo, logger)
 
 	baseReq := &pb.UpdateEventRequest{
+		EventId:     eventID.String(),
 		Title:       "Valid Update Title",
 		Description: "Valid Update Desc",
 		Venue:       "Dallas",
 		EventDate:   "2025-06-29T15:30:45.123Z",
 		TotalSeats:  12,
 		Price:       66,
+		UpdateMask: &fieldmaskpb.FieldMask{
+			Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+		},
 	}
 
 	tests := []struct {
@@ -879,19 +898,18 @@ func TestCatalogManager_UpdateEvent_InvalidDates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := &pb.UpdateEventRequest{
+				EventId:     baseReq.EventId,
 				Title:       baseReq.Title,
 				Description: baseReq.Description,
 				Venue:       baseReq.Venue,
 				EventDate:   tt.eventDate,
 				TotalSeats:  baseReq.TotalSeats,
 				Price:       baseReq.Price,
+				UpdateMask:  baseReq.UpdateMask,
 			}
-
 			resp, err := manager.UpdateEvent(context.Background(), req)
-
 			assert.Nil(t, resp)
 			require.Error(t, err)
-
 			st, ok := status.FromError(err)
 			require.True(t, ok)
 			assert.Equal(t, codes.InvalidArgument, st.Code())
@@ -901,29 +919,40 @@ func TestCatalogManager_UpdateEvent_InvalidDates(t *testing.T) {
 }
 
 func TestCatalogManager_UpdateEvent(t *testing.T) {
+	eventID := uuid.New()
 	mockRepo := &MockRepository{
-		MockUpdateEvent: func(ctx context.Context, event *models.Event) (models.Event, error) {
-			return models.Event{}, nil
+		MockGetEventByID: func(ctx context.Context, eventID uuid.UUID) (models.Event, error) {
+			return models.Event{
+				ID:             eventID,
+				Title:          "Existing Event",
+				Description:    "Existing Description",
+				Venue:          "Existing Venue",
+				EventDate:      time.Date(2030, 1, 1, 20, 0, 0, 0, time.UTC),
+				TotalSeats:     100,
+				AvailableSeats: 100,
+				Price:          50.0,
+			}, nil
 		},
 	}
 	logger := slog.New(slog.DiscardHandler)
-
 	manager := NewCatalogManager(mockRepo, logger)
 
 	t.Run("EmptyTitle", func(t *testing.T) {
 		req := &pb.UpdateEventRequest{
+			EventId:     eventID.String(),
 			Title:       "",
 			Description: "something strange",
 			Venue:       "London",
-			EventDate:   "2025-06-29T15:30:45.123Z",
+			EventDate:   "2035-06-29T15:30:45.123Z",
 			TotalSeats:  12,
 			Price:       66,
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+			},
 		}
-
 		resp, err := manager.UpdateEvent(context.Background(), req)
 		assert.Nil(t, resp)
 		require.Error(t, err)
-
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
@@ -932,18 +961,20 @@ func TestCatalogManager_UpdateEvent(t *testing.T) {
 
 	t.Run("TitleGraterThan200Symbols", func(t *testing.T) {
 		req := &pb.UpdateEventRequest{
+			EventId:     eventID.String(),
 			Title:       "dfsjdhflhlkhAS';K'LSK;'FDJS;KJD;LFHLHwiuiquwieiqyioy329736497236yiusydifutsiydtfyistiipasodjoaj;dlj;ajs;djk;lhflskdlfgjksgdkjfgfjdhfsgiduyfgisgdifgjhaslJGDKHGAKFGLFHKSDHGLJSLJGLJjlgo2394862396^&%^*%*(&^yhofuhsdfjklhskdgfkjsgljdfhlsfsdf",
 			Description: "something strange",
 			Venue:       "London",
-			EventDate:   "2025-06-29T15:30:45.123Z",
+			EventDate:   "2035-06-29T15:30:45.123Z",
 			TotalSeats:  12,
 			Price:       66,
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+			},
 		}
-
 		resp, err := manager.UpdateEvent(context.Background(), req)
 		assert.Nil(t, resp)
 		require.Error(t, err)
-
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
@@ -952,18 +983,20 @@ func TestCatalogManager_UpdateEvent(t *testing.T) {
 
 	t.Run("PriceIsZero_1", func(t *testing.T) {
 		req := &pb.UpdateEventRequest{
+			EventId:     eventID.String(),
 			Title:       "Welcome back",
 			Description: "something strange",
 			Venue:       "London",
-			EventDate:   "2025-06-29T15:30:45.123Z",
+			EventDate:   "2035-06-29T15:30:45.123Z",
 			TotalSeats:  12,
 			Price:       0.0,
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+			},
 		}
-
 		resp, err := manager.UpdateEvent(context.Background(), req)
 		assert.Nil(t, resp)
 		require.Error(t, err)
-
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
@@ -972,18 +1005,20 @@ func TestCatalogManager_UpdateEvent(t *testing.T) {
 
 	t.Run("PriceIsZero_2", func(t *testing.T) {
 		req := &pb.UpdateEventRequest{
+			EventId:     eventID.String(),
 			Title:       "Welcome back",
 			Description: "something strange",
 			Venue:       "London",
-			EventDate:   "2025-06-29T15:30:45.123Z",
+			EventDate:   "2035-06-29T15:30:45.123Z",
 			TotalSeats:  12,
 			Price:       0,
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+			},
 		}
-
 		resp, err := manager.UpdateEvent(context.Background(), req)
 		assert.Nil(t, resp)
 		require.Error(t, err)
-
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
@@ -992,18 +1027,20 @@ func TestCatalogManager_UpdateEvent(t *testing.T) {
 
 	t.Run("NegativePrice", func(t *testing.T) {
 		req := &pb.UpdateEventRequest{
+			EventId:     eventID.String(),
 			Title:       "Welcome back",
 			Description: "something strange",
 			Venue:       "London",
-			EventDate:   "2025-06-29T15:30:45.123Z",
+			EventDate:   "2035-06-29T15:30:45.123Z",
 			TotalSeats:  12,
 			Price:       -12.1,
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+			},
 		}
-
 		resp, err := manager.UpdateEvent(context.Background(), req)
 		assert.Nil(t, resp)
 		require.Error(t, err)
-
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
@@ -1012,18 +1049,20 @@ func TestCatalogManager_UpdateEvent(t *testing.T) {
 
 	t.Run("NegativeTotalSeats", func(t *testing.T) {
 		req := &pb.UpdateEventRequest{
+			EventId:     eventID.String(),
 			Title:       "Welcome back",
 			Description: "something strange",
 			Venue:       "London",
-			EventDate:   "2025-06-29T15:30:45.123Z",
+			EventDate:   "2035-06-29T15:30:45.123Z",
 			TotalSeats:  -13,
 			Price:       55,
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+			},
 		}
-
 		resp, err := manager.UpdateEvent(context.Background(), req)
 		assert.Nil(t, resp)
 		require.Error(t, err)
-
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
@@ -1032,18 +1071,20 @@ func TestCatalogManager_UpdateEvent(t *testing.T) {
 
 	t.Run("DateInThePast", func(t *testing.T) {
 		req := &pb.UpdateEventRequest{
+			EventId:     eventID.String(),
 			Title:       "Welcome back",
 			Description: "something strange",
 			Venue:       "London",
-			EventDate:   time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+			EventDate:   time.Now().Add(-2 * time.Hour).Format(time.RFC3339),
 			TotalSeats:  66,
 			Price:       55,
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+			},
 		}
-
 		resp, err := manager.UpdateEvent(context.Background(), req)
 		assert.Nil(t, resp)
 		require.Error(t, err)
-
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
@@ -1059,27 +1100,49 @@ func TestCatalogManager_UpdateEvent(t *testing.T) {
 			EventDate:   time.Now().Add(-1 * time.Minute).Format(time.RFC3339),
 			TotalSeats:  66,
 			Price:       55,
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+			},
 		}
-
 		resp, err := manager.UpdateEvent(context.Background(), req)
 		assert.Nil(t, resp)
 		require.Error(t, err)
-
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
 		assert.Equal(t, "invalid event id format", st.Message())
 	})
+
+	t.Run("EmptyEventDate", func(t *testing.T) {
+		req := &pb.UpdateEventRequest{
+			EventId:     eventID.String(),
+			Title:       "Welcome back",
+			Description: "something strange",
+			Venue:       "London",
+			EventDate:   "",
+			TotalSeats:  66,
+			Price:       55,
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+			},
+		}
+		resp, err := manager.UpdateEvent(context.Background(), req)
+		assert.Nil(t, resp)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Equal(t, "event_date is required", st.Message())
+	})
 }
 
 func TestCatalogManager_UpdateEvent_DBNoRowsError(t *testing.T) {
 	mockRepo := &MockRepository{
-		MockUpdateEvent: func(ctx context.Context, event *models.Event) (models.Event, error) {
+		MockGetEventByID: func(ctx context.Context, eventID uuid.UUID) (models.Event, error) {
 			return models.Event{}, sql.ErrNoRows
 		},
 	}
 	logger := slog.New(slog.DiscardHandler)
-
 	manager := NewCatalogManager(mockRepo, logger)
 
 	req := &pb.UpdateEventRequest{
@@ -1087,15 +1150,16 @@ func TestCatalogManager_UpdateEvent_DBNoRowsError(t *testing.T) {
 		Title:       "Welcome back",
 		Description: "something strange",
 		Venue:       "London",
-		EventDate:   time.Now().Add(-1 * time.Minute).Format(time.RFC3339),
+		EventDate:   "2035-06-29T15:30:45.123Z",
 		TotalSeats:  66,
 		Price:       55,
+		UpdateMask: &fieldmaskpb.FieldMask{
+			Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+		},
 	}
-
 	resp, err := manager.UpdateEvent(context.Background(), req)
 	assert.Nil(t, resp)
 	require.Error(t, err)
-
 	st, ok := status.FromError(err)
 	require.True(t, ok)
 	assert.Equal(t, codes.NotFound, st.Code())
@@ -1103,29 +1167,42 @@ func TestCatalogManager_UpdateEvent_DBNoRowsError(t *testing.T) {
 }
 
 func TestCatalogManager_UpdateEvent_DBError(t *testing.T) {
+	eventID := uuid.New()
 	mockRepo := &MockRepository{
+		MockGetEventByID: func(ctx context.Context, eventID uuid.UUID) (models.Event, error) {
+			return models.Event{
+				ID:             eventID,
+				Title:          "Existing",
+				Description:    "Existing",
+				Venue:          "Existing",
+				EventDate:      time.Date(2030, 1, 1, 20, 0, 0, 0, time.UTC),
+				TotalSeats:     100,
+				AvailableSeats: 100,
+				Price:          50.0,
+			}, nil
+		},
 		MockUpdateEvent: func(ctx context.Context, event *models.Event) (models.Event, error) {
 			return models.Event{}, fmt.Errorf("db query error")
 		},
 	}
 	logger := slog.New(slog.DiscardHandler)
-
 	manager := NewCatalogManager(mockRepo, logger)
 
 	req := &pb.UpdateEventRequest{
-		EventId:     uuid.NewString(),
+		EventId:     eventID.String(),
 		Title:       "Welcome back",
 		Description: "something strange",
 		Venue:       "London",
-		EventDate:   time.Now().Add(-1 * time.Minute).Format(time.RFC3339),
+		EventDate:   "2035-06-29T15:30:45.123Z",
 		TotalSeats:  66,
 		Price:       55,
+		UpdateMask: &fieldmaskpb.FieldMask{
+			Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+		},
 	}
-
 	resp, err := manager.UpdateEvent(context.Background(), req)
 	assert.Nil(t, resp)
 	require.Error(t, err)
-
 	st, ok := status.FromError(err)
 	require.True(t, ok)
 	assert.Equal(t, codes.Internal, st.Code())
@@ -1138,6 +1215,18 @@ func TestCatalogManager_UpdateEvent_Success(t *testing.T) {
 	now := time.Now()
 
 	mockRepo := &MockRepository{
+		MockGetEventByID: func(ctx context.Context, eventID uuid.UUID) (models.Event, error) {
+			return models.Event{
+				ID:             eventID,
+				Title:          "Old Title",
+				Description:    "Old Description",
+				Venue:          "Old Venue",
+				EventDate:      time.Date(2029, 1, 1, 20, 0, 0, 0, time.UTC),
+				TotalSeats:     1000,
+				AvailableSeats: 900,
+				Price:          100.0,
+			}, nil
+		},
 		MockUpdateEvent: func(ctx context.Context, event *models.Event) (models.Event, error) {
 			assert.Equal(t, eventID, event.ID)
 			assert.Equal(t, "Updated Concert", event.Title)
@@ -1146,7 +1235,6 @@ func TestCatalogManager_UpdateEvent_Success(t *testing.T) {
 			assert.Equal(t, eventDate, event.EventDate)
 			assert.Equal(t, int32(3000), event.TotalSeats)
 			assert.Equal(t, 180.0, event.Price)
-
 			return models.Event{
 				ID:             eventID,
 				Title:          event.Title,
@@ -1173,22 +1261,306 @@ func TestCatalogManager_UpdateEvent_Success(t *testing.T) {
 		EventDate:   eventDate.Format(time.RFC3339),
 		TotalSeats:  3000,
 		Price:       180.0,
+		UpdateMask: &fieldmaskpb.FieldMask{
+			Paths: []string{"title", "description", "venue", "event_date", "total_seats", "price"},
+		},
 	}
 
 	resp, err := manager.UpdateEvent(context.Background(), req)
-
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.NotNil(t, resp.Event)
-
 	assert.Equal(t, eventID.String(), resp.Event.Id)
 	assert.Equal(t, "Updated Concert", resp.Event.Title)
 	assert.Equal(t, "Updated description", resp.Event.Description)
 	assert.Equal(t, "New Venue", resp.Event.Venue)
 	assert.Equal(t, eventDate.Format(time.RFC3339), resp.Event.EventDate)
 	assert.Equal(t, int32(3000), resp.Event.TotalSeats)
-	assert.Equal(t, int32(2500), resp.Event.AvailableSeats) // Сохранено из БД
+	assert.Equal(t, int32(2500), resp.Event.AvailableSeats)
 	assert.Equal(t, 180.0, resp.Event.Price)
+}
+
+func TestCatalogManager_UpdateEvent_WithFieldMask_PartialUpdate(t *testing.T) {
+	eventID := uuid.New()
+	now := time.Now()
+
+	mockRepo := &MockRepository{
+		MockGetEventByID: func(ctx context.Context, eventID uuid.UUID) (models.Event, error) {
+			return models.Event{
+				ID:             eventID,
+				Title:          "Old Title",
+				Description:    "Old Description",
+				Venue:          "Old Venue",
+				EventDate:      time.Date(2029, 1, 1, 20, 0, 0, 0, time.UTC),
+				TotalSeats:     1000,
+				AvailableSeats: 900,
+				Price:          100.0,
+			}, nil
+		},
+		MockUpdateEvent: func(ctx context.Context, event *models.Event) (models.Event, error) {
+			assert.Equal(t, "New Title Only", event.Title)
+			assert.Equal(t, "Old Description", event.Description)
+			assert.Equal(t, "Old Venue", event.Venue)
+			assert.Equal(t, int32(2000), event.TotalSeats)
+			assert.Equal(t, 100.0, event.Price)
+			return models.Event{
+				ID:             eventID,
+				Title:          event.Title,
+				Description:    event.Description,
+				Venue:          event.Venue,
+				EventDate:      event.EventDate,
+				TotalSeats:     event.TotalSeats,
+				AvailableSeats: 900,
+				Price:          event.Price,
+				CreatedAt:      now.Add(-48 * time.Hour),
+				UpdatedAt:      now,
+			}, nil
+		},
+	}
+
+	logger := slog.New(slog.DiscardHandler)
+	manager := NewCatalogManager(mockRepo, logger)
+
+	req := &pb.UpdateEventRequest{
+		EventId:    eventID.String(),
+		Title:      "New Title Only",
+		TotalSeats: 2000,
+		UpdateMask: &fieldmaskpb.FieldMask{
+			Paths: []string{"title", "total_seats"},
+		},
+	}
+
+	resp, err := manager.UpdateEvent(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "New Title Only", resp.Event.Title)
+	assert.Equal(t, "Old Description", resp.Event.Description)
+	assert.Equal(t, "Old Venue", resp.Event.Venue)
+	assert.Equal(t, int32(2000), resp.Event.TotalSeats)
+	assert.Equal(t, 100.0, resp.Event.Price)
+}
+
+func TestCatalogManager_UpdateEvent_WithFieldMask_OnlyDescription(t *testing.T) {
+	eventID := uuid.New()
+	now := time.Now()
+
+	mockRepo := &MockRepository{
+		MockGetEventByID: func(ctx context.Context, eventID uuid.UUID) (models.Event, error) {
+			return models.Event{
+				ID:             eventID,
+				Title:          "Keep This Title",
+				Description:    "Old Description",
+				Venue:          "Keep This Venue",
+				EventDate:      time.Date(2029, 1, 1, 20, 0, 0, 0, time.UTC),
+				TotalSeats:     1000,
+				AvailableSeats: 900,
+				Price:          100.0,
+			}, nil
+		},
+		MockUpdateEvent: func(ctx context.Context, event *models.Event) (models.Event, error) {
+			assert.Equal(t, "Keep This Title", event.Title)
+			assert.Equal(t, "New Description Only", event.Description)
+			assert.Equal(t, "Keep This Venue", event.Venue)
+			return models.Event{
+				ID:             eventID,
+				Title:          event.Title,
+				Description:    event.Description,
+				Venue:          event.Venue,
+				EventDate:      event.EventDate,
+				TotalSeats:     event.TotalSeats,
+				AvailableSeats: 900,
+				Price:          event.Price,
+				CreatedAt:      now.Add(-48 * time.Hour),
+				UpdatedAt:      now,
+			}, nil
+		},
+	}
+
+	logger := slog.New(slog.DiscardHandler)
+	manager := NewCatalogManager(mockRepo, logger)
+
+	req := &pb.UpdateEventRequest{
+		EventId:     eventID.String(),
+		Description: "New Description Only",
+		UpdateMask: &fieldmaskpb.FieldMask{
+			Paths: []string{"description"},
+		},
+	}
+
+	resp, err := manager.UpdateEvent(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, "Keep This Title", resp.Event.Title)
+	assert.Equal(t, "New Description Only", resp.Event.Description)
+	assert.Equal(t, "Keep This Venue", resp.Event.Venue)
+}
+
+func TestCatalogManager_UpdateEvent_WithFieldMask_UnknownField(t *testing.T) {
+	eventID := uuid.New()
+	mockRepo := &MockRepository{
+		MockGetEventByID: func(ctx context.Context, eventID uuid.UUID) (models.Event, error) {
+			return models.Event{
+				ID:             eventID,
+				Title:          "Existing",
+				Description:    "Existing",
+				Venue:          "Existing",
+				EventDate:      time.Date(2030, 1, 1, 20, 0, 0, 0, time.UTC),
+				TotalSeats:     100,
+				AvailableSeats: 100,
+				Price:          50.0,
+			}, nil
+		},
+	}
+
+	logger := slog.New(slog.DiscardHandler)
+	manager := NewCatalogManager(mockRepo, logger)
+
+	req := &pb.UpdateEventRequest{
+		EventId: eventID.String(),
+		Title:   "New Title",
+		UpdateMask: &fieldmaskpb.FieldMask{
+			Paths: []string{"title", "nonexistent_field"},
+		},
+	}
+
+	resp, err := manager.UpdateEvent(context.Background(), req)
+	assert.Nil(t, resp)
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+	assert.Contains(t, st.Message(), "unknown field")
+}
+
+func TestCatalogManager_UpdateEvent_WithFieldMask_EmptyMask(t *testing.T) {
+	eventID := uuid.New()
+	mockRepo := &MockRepository{
+		MockGetEventByID: func(ctx context.Context, eventID uuid.UUID) (models.Event, error) {
+			return models.Event{
+				ID:             eventID,
+				Title:          "Existing",
+				Description:    "Existing",
+				Venue:          "Existing",
+				EventDate:      time.Date(2030, 1, 1, 20, 0, 0, 0, time.UTC),
+				TotalSeats:     100,
+				AvailableSeats: 100,
+				Price:          50.0,
+			}, nil
+		},
+		MockUpdateEvent: func(ctx context.Context, event *models.Event) (models.Event, error) {
+			return models.Event{}, fmt.Errorf("empty update mask")
+		},
+	}
+
+	logger := slog.New(slog.DiscardHandler)
+	manager := NewCatalogManager(mockRepo, logger)
+
+	req := &pb.UpdateEventRequest{
+		EventId:     eventID.String(),
+		Title:       "New Title",
+		Description: "New Desc",
+		Venue:       "New Venue",
+		EventDate:   "2035-06-29T15:30:45.123Z",
+		TotalSeats:  200,
+		Price:       75.0,
+		UpdateMask: &fieldmaskpb.FieldMask{
+			Paths: []string{},
+		},
+	}
+
+	resp, err := manager.UpdateEvent(context.Background(), req)
+	require.Error(t, err)
+	assert.Nil(t, resp)
+}
+
+func TestCatalogManager_UpdateEvent_WithoutFieldMask_FullUpdate(t *testing.T) {
+	eventID := uuid.New()
+	eventDate := time.Date(2030, 12, 31, 20, 0, 0, 0, time.UTC)
+	now := time.Now()
+
+	mockRepo := &MockRepository{
+		MockGetEventByID: func(ctx context.Context, eventID uuid.UUID) (models.Event, error) {
+			return models.Event{
+				ID:             eventID,
+				Title:          "Old Title",
+				Description:    "Old Description",
+				Venue:          "Old Venue",
+				EventDate:      time.Date(2029, 1, 1, 20, 0, 0, 0, time.UTC),
+				TotalSeats:     1000,
+				AvailableSeats: 900,
+				Price:          100.0,
+			}, nil
+		},
+		MockUpdateEvent: func(ctx context.Context, event *models.Event) (models.Event, error) {
+			assert.Equal(t, "Full Update Title", event.Title)
+			assert.Equal(t, "Full Update Desc", event.Description)
+			assert.Equal(t, "Full Update Venue", event.Venue)
+			assert.Equal(t, eventDate, event.EventDate)
+			assert.Equal(t, int32(5000), event.TotalSeats)
+			assert.Equal(t, 250.0, event.Price)
+			return models.Event{
+				ID:             eventID,
+				Title:          event.Title,
+				Description:    event.Description,
+				Venue:          event.Venue,
+				EventDate:      event.EventDate,
+				TotalSeats:     event.TotalSeats,
+				AvailableSeats: 4500,
+				Price:          event.Price,
+				CreatedAt:      now.Add(-48 * time.Hour),
+				UpdatedAt:      now,
+			}, nil
+		},
+	}
+
+	logger := slog.New(slog.DiscardHandler)
+	manager := NewCatalogManager(mockRepo, logger)
+
+	req := &pb.UpdateEventRequest{
+		EventId:     eventID.String(),
+		Title:       "Full Update Title",
+		Description: "Full Update Desc",
+		Venue:       "Full Update Venue",
+		EventDate:   eventDate.Format(time.RFC3339),
+		TotalSeats:  5000,
+		Price:       250.0,
+	}
+
+	resp, err := manager.UpdateEvent(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "Full Update Title", resp.Event.Title)
+	assert.Equal(t, "Full Update Desc", resp.Event.Description)
+	assert.Equal(t, "Full Update Venue", resp.Event.Venue)
+	assert.Equal(t, eventDate.Format(time.RFC3339), resp.Event.EventDate)
+	assert.Equal(t, int32(5000), resp.Event.TotalSeats)
+	assert.Equal(t, 250.0, resp.Event.Price)
+}
+
+func TestCatalogManager_UpdateEvent_WithFieldMask_GetEventDBError(t *testing.T) {
+	mockRepo := &MockRepository{
+		MockGetEventByID: func(ctx context.Context, eventID uuid.UUID) (models.Event, error) {
+			return models.Event{}, fmt.Errorf("db query error")
+		},
+	}
+
+	logger := slog.New(slog.DiscardHandler)
+	manager := NewCatalogManager(mockRepo, logger)
+
+	req := &pb.UpdateEventRequest{
+		EventId: uuid.NewString(),
+		Title:   "New Title",
+		UpdateMask: &fieldmaskpb.FieldMask{
+			Paths: []string{"title"},
+		},
+	}
+
+	resp, err := manager.UpdateEvent(context.Background(), req)
+	assert.Nil(t, resp)
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.Internal, st.Code())
+	assert.Equal(t, "internal server error", st.Message())
 }
 
 func TestCatalogManager_DeleteEvent(t *testing.T) {
