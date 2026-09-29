@@ -1,0 +1,88 @@
+scalar Time
+
+input RegisterInput {
+    email: String!
+    password: String!
+    name: String!
+}
+
+input LoginInput {
+    email: String!
+    password: String!
+}
+
+input CreateEventInput {
+    title: String!
+    description: String
+    venue: String!
+    eventDate: Time!
+    totalSeats: Int!
+    price: Float!
+}
+
+enum EventField {
+    title
+    description
+    venue
+    eventDate
+    totalSeats
+    price
+}
+
+input UpdateEventInput {
+    title: String
+    description: String
+    venue: String
+    eventDate: Time
+    totalSeats: Int
+    price: Float
+    updateMask: [EventField!]
+}
+
+input ListEventsInput {
+    page: Int!
+    pageSize: Int!
+    searchQuery: String
+}
+
+type Event {
+    id: ID!
+    title: String!
+    description: String
+    venue: String!
+    eventDate: Time!
+    totalSeats: Int!
+    availableSeats: Int!
+    price: Float!
+    createdAt: Time
+    updatedAt: Time
+}
+
+type EventList {
+    events: [Event!]!
+    totalCount: Int!
+    page: Int!
+    pageSize: Int!
+}
+
+type AuthPayload {
+    userId: ID!
+    accessToken: String!
+    refreshToken: String!
+    expiresIn: Int!
+}
+
+type Query {
+    getEvent(id: ID!): Event!
+    listEvents(input: ListEventsInput!): EventList!
+}
+
+type Mutation {
+    register(input: RegisterInput!): AuthPayload!
+    login(input: LoginInput!): AuthPayload!
+    logout(refreshToken: String!): Boolean!
+    
+    createEvent(input: CreateEventInput!): Event!
+    updateEvent(id: ID!, input: UpdateEventInput!): Event!
+    deleteEvent(id: ID!): Boolean!
+}
