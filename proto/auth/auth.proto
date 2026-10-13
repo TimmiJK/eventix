@@ -57,10 +57,23 @@ message ValidateTokenResponse {
     string role = 4;
 }
 
+message GetMeRequest {
+    string user_id = 1;
+}
+
+message GetMeResponse {
+    string user_id = 1;
+    string email = 2;
+    string name = 3;
+    string role = 4;
+    string created_at = 5;
+}
+
 service AuthService {
     rpc Register(RegisterRequest) returns (RegisterResponse);
     rpc Login(LoginRequest) returns (LoginResponse);
     rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
     rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
     rpc Logout(LogoutRequest) returns (LogoutResponse);
+    rpc GetMe(GetMeRequest) returns (GetMeResponse);
 }

@@ -1,13 +1,18 @@
 package models
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type User struct {
-	ID       uuid.UUID
-	Email    string
-	Name     string
-	Role     string
-	Password []byte
+	ID        uuid.UUID
+	Email     string
+	Name      string
+	Role      string
+	Password  []byte
+	CreatedAt time.Time
 }
 
 type AuthTokens struct {

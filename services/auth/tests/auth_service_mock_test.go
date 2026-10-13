@@ -1,11 +1,14 @@
-package auth
+package tests
 
 import (
 	"context"
 	"crypto/rand"
-	auth "eventix/pkg/jwt"
+	"database/sql"
+	"errors"
+	jwtTokens "eventix/pkg/jwt"
 	pb "eventix/proto/auth/pb"
 	"eventix/services/auth/internal/models"
+	auth "eventix/services/auth/internal/service"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -59,7 +62,7 @@ func TestAuthManager_Register(t *testing.T) {
 	}
 
 	logger := slog.New(slog.DiscardHandler)
-	manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 	t.Run("InvalidEmail", func(t *testing.T) {
 		tests := []struct {
@@ -151,7 +154,7 @@ func TestAuthManager_Register(t *testing.T) {
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.Internal, st.Code())
-		assert.Contains(t, st.Message(), "failed to create tokens:")
+		assert.Contains(t, st.Message(), "failed to create tokens")
 	})
 }
 
@@ -166,7 +169,7 @@ func TestAuthManager_Register_ValidPassword_10Symbols(t *testing.T) {
 	}
 
 	logger := slog.New(slog.DiscardHandler)
-	manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 	req := &pb.RegisterRequest{
 		Email:    "testemail@test.com",
@@ -190,7 +193,7 @@ func TestAuthManager_Register_Success(t *testing.T) {
 	}
 
 	logger := slog.New(slog.DiscardHandler)
-	manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 	req := &pb.RegisterRequest{
 		Email:    "test@example.com",
@@ -220,7 +223,7 @@ func TestAuthManager_Login(t *testing.T) {
 	}
 
 	logger := slog.New(slog.DiscardHandler)
-	manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 	t.Run("EmptyFields", func(t *testing.T) {
 		tests := []struct {
@@ -229,9 +232,8 @@ func TestAuthManager_Login(t *testing.T) {
 			password string
 			message  string
 		}{
-			{"EmptyEmail", "", "wrongpassword123", "email and password are required"},
-			{"EmptyPassword", "test@example.com", "", "email and password are required"},
-			{"EmptyBoth", "", "", "email and password are required"},
+			{"EmptyEmail", "", "wrongpassword123", "invalid credentials"},
+			{"EmptyPassword", "test@example.com", "", "invalid credentials"},
 		}
 
 		for _, tt := range tests {
@@ -245,13 +247,13 @@ func TestAuthManager_Login(t *testing.T) {
 				require.Error(t, err)
 				st, ok := status.FromError(err)
 				require.True(t, ok)
-				assert.Equal(t, codes.InvalidArgument, st.Code())
+				assert.Equal(t, codes.Unauthenticated, st.Code())
 				assert.Equal(t, tt.message, st.Message())
 			})
 		}
 	})
 
-	t.Run("InvalidCredentials", func(t *testing.T) {
+	t.Run("InvalidPassword", func(t *testing.T) {
 		req := &pb.LoginRequest{
 			Email:    "test@example.com",
 			Password: "wrongpassword123",
@@ -261,7 +263,7 @@ func TestAuthManager_Login(t *testing.T) {
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Unauthenticated, st.Code())
+		assert.Equal(t, codes.InvalidArgument, st.Code())
 		assert.Equal(t, "invalid credentials", st.Message())
 	})
 }
@@ -287,7 +289,7 @@ func TestAuthManager_Login_Success(t *testing.T) {
 	}
 
 	logger := slog.New(slog.DiscardHandler)
-	manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 	req := &pb.LoginRequest{
 		Email:    "test@example.com",
@@ -312,7 +314,7 @@ func TestAuthManager_Logout(t *testing.T) {
 
 	logger := slog.New(slog.DiscardHandler)
 
-	manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 	t.Run("InvalidRefreshToken", func(t *testing.T) {
 		reqLogout := &pb.LogoutRequest{
 			RefreshToken: "bad token",
@@ -332,7 +334,7 @@ func TestAuthManager_Logout(t *testing.T) {
 func TestAuthManager_Logout_Success(t *testing.T) {
 	userID := uuid.New()
 	tokenID := "test-token-id"
-	claims := &auth.RefreshClaims{
+	claims := &jwtTokens.RefreshClaims{
 		UserID:  userID.String(),
 		TokenID: tokenID,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -350,7 +352,7 @@ func TestAuthManager_Logout_Success(t *testing.T) {
 	}
 
 	logger := slog.New(slog.DiscardHandler)
-	manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 	req := &pb.LogoutRequest{
 		RefreshToken: refreshToken,
@@ -367,7 +369,7 @@ func TestAuthManager_RefreshToken_Success(t *testing.T) {
 	userID := uuid.New()
 	tokenID := "test-token-id"
 
-	claims := &auth.RefreshClaims{
+	claims := &jwtTokens.RefreshClaims{
 		UserID:  userID.String(),
 		TokenID: tokenID,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -392,7 +394,7 @@ func TestAuthManager_RefreshToken_Success(t *testing.T) {
 	}
 
 	logger := slog.New(slog.DiscardHandler)
-	manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 	req := &pb.RefreshTokenRequest{
 		RefreshToken: refreshToken,
@@ -410,7 +412,7 @@ func TestAuthManager_RefreshToken_RevokedToken(t *testing.T) {
 	userID := uuid.New()
 	tokenID := "test-token-id"
 
-	claims := &auth.RefreshClaims{
+	claims := &jwtTokens.RefreshClaims{
 		UserID:  userID.String(),
 		TokenID: tokenID,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -427,7 +429,7 @@ func TestAuthManager_RefreshToken_RevokedToken(t *testing.T) {
 	}
 
 	logger := slog.New(slog.DiscardHandler)
-	manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 	req := &pb.RefreshTokenRequest{
 		RefreshToken: refreshToken,
@@ -440,7 +442,7 @@ func TestAuthManager_RefreshToken_RevokedToken(t *testing.T) {
 	st, ok := status.FromError(err)
 	require.True(t, ok)
 	assert.Equal(t, codes.Unauthenticated, st.Code())
-	assert.Equal(t, "refresh token has been revoked", st.Message())
+	assert.Equal(t, "invalid refresh token", st.Message())
 }
 
 func TestAuthManager_ValidateToken(t *testing.T) {
@@ -448,7 +450,7 @@ func TestAuthManager_ValidateToken(t *testing.T) {
 	tokenID := "test-token-id"
 	email := "testuser@gmail.com"
 	role := "user"
-	claimsAccess := &auth.AccessClaims{
+	claimsAccess := &jwtTokens.AccessClaims{
 		UserID: userID.String(),
 		Email:  email,
 		Role:   role,
@@ -461,7 +463,7 @@ func TestAuthManager_ValidateToken(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claimsAccess)
 	accessToken, _ := token.SignedString([]byte("test-secret"))
 
-	claimsRefresh := &auth.RefreshClaims{
+	claimsRefresh := &jwtTokens.RefreshClaims{
 		UserID:  userID.String(),
 		TokenID: tokenID,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -484,7 +486,7 @@ func TestAuthManager_ValidateToken(t *testing.T) {
 
 	logger := slog.New(slog.DiscardHandler)
 
-	manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 	ctx := context.Background()
 	t.Run("ValidAccessToken", func(t *testing.T) {
 		req := &pb.ValidateTokenRequest{
@@ -562,11 +564,11 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 
 	logger := slog.New(slog.DiscardHandler)
 
-	manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 	ctx := context.Background()
 
 	t.Run("InvalidAccessToken_WrongIDFormat", func(t *testing.T) {
-		claimsAccess := &auth.AccessClaims{
+		claimsAccess := &jwtTokens.AccessClaims{
 			UserID: userID,
 			Email:  email,
 			Role:   role,
@@ -592,7 +594,7 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 	})
 
 	t.Run("InvalidAccessToken_NoEmailAndRole", func(t *testing.T) {
-		claimsAccess := &auth.AccessClaims{
+		claimsAccess := &jwtTokens.AccessClaims{
 			UserID: userID,
 			RegisteredClaims: jwt.RegisteredClaims{
 				ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
@@ -616,7 +618,7 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 	})
 
 	t.Run("InvalidRefreshToken_WrongIDFormat", func(t *testing.T) {
-		claimsRefresh := &auth.RefreshClaims{
+		claimsRefresh := &jwtTokens.RefreshClaims{
 			UserID:  userID,
 			TokenID: tokenID,
 			RegisteredClaims: jwt.RegisteredClaims{
@@ -641,7 +643,7 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 	})
 
 	t.Run("InvalidRefreshToken_RevokeToken", func(t *testing.T) {
-		claimsRefresh := &auth.RefreshClaims{
+		claimsRefresh := &jwtTokens.RefreshClaims{
 			UserID:  uuid.NewString(),
 			TokenID: tokenID,
 			RegisteredClaims: jwt.RegisteredClaims{
@@ -661,8 +663,8 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 		assert.False(t, resp.IsValid)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Internal, st.Code())
-		assert.Equal(t, "token was revoked or invalid", st.Message())
+		assert.Equal(t, codes.Unauthenticated, st.Code())
+		assert.Equal(t, "invalid token", st.Message())
 	})
 
 	t.Run("InvalidRefreshToken_UserNotFound", func(t *testing.T) {
@@ -677,10 +679,10 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 
 		logger := slog.New(slog.DiscardHandler)
 
-		manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+		manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 		ctx := context.Background()
 
-		claimsRefresh := &auth.RefreshClaims{
+		claimsRefresh := &jwtTokens.RefreshClaims{
 			UserID:  uuid.NewString(),
 			TokenID: tokenID,
 			RegisteredClaims: jwt.RegisteredClaims{
@@ -700,14 +702,14 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 		assert.False(t, resp.IsValid)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Internal, st.Code())
-		assert.Equal(t, "failed to get user", st.Message())
+		assert.Equal(t, codes.Unauthenticated, st.Code())
+		assert.Equal(t, "invalid token", st.Message())
 	})
 
 	t.Run("ValidateToken_MalformedJWT", func(t *testing.T) {
 		mockRepo := &MockRepository{}
 		logger := slog.New(slog.DiscardHandler)
-		manager := NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+		manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 		req := &pb.ValidateTokenRequest{Token: "this.is.not.a.valid.jwt.string.at.all"}
 		resp, err := manager.ValidateToken(context.Background(), req)
@@ -718,5 +720,115 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, codes.Unauthenticated, st.Code())
 		assert.Equal(t, "invalid token", st.Message())
+	})
+}
+
+func TestAuthManager_GetMe_Success(t *testing.T) {
+	mockRepo := &MockRepository{
+		MockGetUserByID: func(ctx context.Context, userID uuid.UUID) (models.User, error) {
+			return models.User{
+				ID:        userID,
+				Email:     "example@tt.com",
+				Name:      "user",
+				Role:      "user",
+				CreatedAt: time.Date(2026, 05, 05, 21, 0, 0, 0, time.UTC),
+			}, nil
+		},
+	}
+
+	logger := slog.New(slog.DiscardHandler)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+
+	req := &pb.GetMeRequest{
+		UserId: uuid.New().String(),
+	}
+
+	resp, err := manager.GetMe(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	assert.NotEmpty(t, resp.UserId)
+	assert.Equal(t, "example@tt.com", resp.Email)
+	assert.Equal(t, "user", resp.Name)
+	assert.Equal(t, "user", resp.Role)
+	assert.Equal(t, "2026-05-05T21:00:00Z", resp.CreatedAt)
+}
+
+func TestAuthManager_GetMe_Error(t *testing.T) {
+	mockRepo := &MockRepository{
+		MockGetUserByID: func(ctx context.Context, userID uuid.UUID) (models.User, error) {
+			return models.User{}, errors.New("can't get user")
+		},
+	}
+
+	logger := slog.New(slog.DiscardHandler)
+	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+
+	t.Run("Empty userID", func(t *testing.T) {
+		req := &pb.GetMeRequest{
+			UserId: "",
+		}
+
+		resp, err := manager.GetMe(context.Background(), req)
+		require.Error(t, err)
+		require.Empty(t, resp)
+
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Equal(t, "user_id is required", st.Message())
+	})
+
+	t.Run("Invalid userID", func(t *testing.T) {
+		req := &pb.GetMeRequest{
+			UserId: "12455-fiudi-uuid",
+		}
+
+		resp, err := manager.GetMe(context.Background(), req)
+		require.Error(t, err)
+		require.Empty(t, resp)
+
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.Internal, st.Code())
+		assert.Equal(t, "invalid user id", st.Message())
+	})
+
+	t.Run("DBError_InternalError", func(t *testing.T) {
+		req := &pb.GetMeRequest{
+			UserId: uuid.New().String(),
+		}
+
+		resp, err := manager.GetMe(context.Background(), req)
+		require.Error(t, err)
+		require.Empty(t, resp)
+
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.Internal, st.Code())
+		assert.Equal(t, "failed to get user", st.Message())
+	})
+
+	t.Run("DBError_UserNotFound", func(t *testing.T) {
+		mockRepo := &MockRepository{
+			MockGetUserByID: func(ctx context.Context, userID uuid.UUID) (models.User, error) {
+				return models.User{}, sql.ErrNoRows
+			},
+		}
+
+		logger := slog.New(slog.DiscardHandler)
+		manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+		req := &pb.GetMeRequest{
+			UserId: uuid.New().String(),
+		}
+
+		resp, err := manager.GetMe(context.Background(), req)
+		require.Error(t, err)
+		require.Empty(t, resp)
+
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.NotFound, st.Code())
+		assert.Equal(t, "user not found", st.Message())
 	})
 }
