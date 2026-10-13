@@ -42,8 +42,23 @@ migrate-create:
 	migrate create -ext sql -dir migrations -seq $(NAME)
 
 test-coverage-%:
-	cd services/$*/internal/service && \
-	go test -v -race -coverprofile=cover.out && go tool cover -html=cover.out -o cover.html
+	cd services/$* && \
+	go test -v -race \
+		-coverpkg=./internal/... \
+		-coverprofile=./tests/cover.out \
+		./tests && \
+	go tool cover -html=./tests/cover.out -o ./tests/cover.html
+
+test-coverage-gateway:
+	cd gateway && \
+	go test -v -race \
+		-coverpkg=./... \
+		-coverprofile=./tests/cover.out \
+		./tests && \
+	go tool cover -html=./tests/cover.out -o ./tests/cover.html
 
 run-%:
 	go run services/$*/cmd/main.go
+
+run-gateway:
+	go run gateway/cmd/main.go
