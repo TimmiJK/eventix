@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       services: ${{ steps.matrix.outputs.services }}
+      gateway: ${{ steps.filter.outputs.gateway }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +40,8 @@ jobs:
             notification:
               - 'services/notification/**'
               - 'proto/notification/**'
+            gateway:
+              - 'gateway/**'
             shared:
               - 'pkg/**'
               - 'go.mod'
@@ -46,7 +49,6 @@ jobs:
               - 'migrations/**'
               - '.github/workflows/**'
               - 'deployments/**'
-              - 'gateaway/**'
 
       - name: Build test matrix
         id: matrix
@@ -100,7 +102,6 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: latest
-          working-directory: ${{ matrix.dir }}
           args: --timeout=5m
 
   build:
@@ -117,7 +118,7 @@ jobs:
       - name: Build all packages
         run: go build ./...
 
-  test:
+  test-services:
     name: Test ${{ matrix.service }}
     runs-on: ubuntu-latest
     needs: changes
@@ -128,28 +129,8 @@ jobs:
       matrix:
         service: ${{ fromJSON(needs.changes.outputs.services) }}
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: eventix_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U test -d eventix_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
     env:
-      DB_HOST_TEST: localhost
-      DB_PORT_TEST: "5432"
-      DB_USER_TEST: test
-      DB_PASSWORD_TEST: test
-      DB_NAME_TEST: eventix_test
-
+      TESTCONTAINERS_RYUK_DISABLED: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -158,50 +139,81 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Apply migrations
+      - name: Check Docker availability
         run: |
-          SERVICE="${{ matrix.service }}"
-
-          MIGRATIONS_DIR=""
-          if [ -d "migrations" ]; then
-            MIGRATIONS_DIR="migrations"
-          fi
-
-          if [ -n "$MIGRATIONS_DIR" ]; then
-            echo "Applying migrations from $MIGRATIONS_DIR"
-            go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest \
-              -path "$MIGRATIONS_DIR" \
-              -database "postgres://test:test@localhost:5432/eventix_test?sslmode=disable" up
-          else
-            echo "No migrations directory for $SERVICE yet"
-          fi
+          docker --version
+          docker info
 
       - name: Run service tests
         run: |
           SERVICE="${{ matrix.service }}"
-
           if [ -f "services/$SERVICE/go.mod" ]; then
-            echo "== testing services/$SERVICE"
+            echo "== testing services/$SERVICE with testcontainers"
             cd "services/$SERVICE"
-            go test -race -count=1 ./...
+            go test -race -count=1 -v ./...
           else
             echo "services/$SERVICE has no go.mod yet, skipping tests"
           fi
+        timeout-minutes: 10
+  
+  test-gateway:
+    name: Test Gateway
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.result == 'success' && (needs.changes.outputs.gateway == 'true' || needs.changes.outputs.services != '[]') }}
+
+    env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+          DB_NAME_TEST: eventix_test
+          DB_USER_TEST: test
+          DB_PASSWORD_TEST: test
+          CGO_ENABLED: 0
+          
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check Docker availability
+        run: |
+          docker --version
+          docker info
+
+      - name: Run gateway tests
+        run: |
+          echo "== Running gateway tests with testcontainers"
+          cd gateway
+          go test -race -count=1 -v ./...
+        timeout-minutes: 10
 
   ci-success:
     name: CI success
     runs-on: ubuntu-latest
     if: always()
-    needs: [changes, lint, build, test]
+    needs: [changes, lint, build, test-services, test-gateway]
     steps:
       - name: Check job results
         run: |
-          echo "Job results: ${{ join(needs.*.result, ', ') }}"
-
-          if [ "${{ contains(needs.*.result, 'failure') }}" = "true" ] || \
-             [ "${{ contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+          echo "Job results:"
+          echo "  changes: ${{ needs.changes.result }}"
+          echo "  lint: ${{ needs.lint.result }}"
+          echo "  build: ${{ needs.build.result }}"
+          echo "  test: ${{ needs.test-services.result }}"
+          echo "  test-gateway: ${{ needs.test-gateway.result }}"
+          if [ "${{ needs.changes.result }}" = "failure" ] || \
+             [ "${{ needs.changes.result }}" = "cancelled" ] || \
+             [ "${{ needs.lint.result }}" = "failure" ] || \
+             [ "${{ needs.lint.result }}" = "cancelled" ] || \
+             [ "${{ needs.build.result }}" = "failure" ] || \
+             [ "${{ needs.build.result }}" = "cancelled" ] || \
+             [ "${{ needs.test-services.result }}" = "failure" ] || \
+             [ "${{ needs.test-services.result }}" = "cancelled" ] || \
+             [ "${{ needs.test-gateway.result }}" = "failure" ] || \
+             [ "${{ needs.test-gateway.result }}" = "cancelled" ]; then
             echo "Some CI jobs failed"
             exit 1
           fi
-
           echo "CI passed"
