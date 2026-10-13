@@ -1,16 +1,22 @@
-package auth
+package tests
 
 import (
 	"context"
 	"database/sql"
-	auth "eventix/pkg/jwt"
-	"eventix/pkg/postgres"
+	jwtTokens "eventix/pkg/jwt"
+	posgresPkg "eventix/pkg/postgres"
 	"eventix/proto/auth/pb"
 	"eventix/services/auth/internal/repository"
+	auth "eventix/services/auth/internal/service"
 	"fmt"
 	"log"
 	"log/slog"
+	"net"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,46 +25,235 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-func ConnectTestDb() *sql.DB {
-	if err := godotenv.Load("../../../../.env"); err != nil {
+type TestEnvironment struct {
+	PostgresContainer *postgres.PostgresContainer
+	AuthServiceCmd    *exec.Cmd
+	DB                *sql.DB
+	DSN               string
+}
+
+func repoRoot(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+
+	for i := 0; i < 10; i++ {
+		if _, err := os.Stat(filepath.Join(dir, ".gitignore")); err == nil {
+			return dir
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	t.Fatal("repo root not found (.gitignore marker)")
+	return ""
+}
+
+func buildBinary(t *testing.T, dir, out string) string {
+	t.Helper()
+
+	bin := filepath.Join(t.TempDir(), out)
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Dir = dir
+	outBytes, err := cmd.CombinedOutput()
+	require.NoError(t, err, "build failed: %s", string(outBytes))
+
+	return bin
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer l.Close()
+
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+func waitReady(t *testing.T, addr string, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("service on %s did not become ready in %s", addr, timeout)
+}
+
+func killCmd(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Kill()
+	_, _ = cmd.Process.Wait()
+}
+
+func envDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func setupTestEnvironment(t *testing.T) *TestEnvironment {
+	t.Helper()
+
+	rootDir := repoRoot(t)
+
+	if err := godotenv.Load(filepath.Join(rootDir, ".env")); err != nil {
 		log.Println(" .env file not found, using environment variables")
 	}
 
-	dbHost := os.Getenv("DB_HOST_TEST")
-	dbPort := os.Getenv("DB_PORT_TEST")
-	dbUser := os.Getenv("DB_USER_TEST")
-	dbPass := os.Getenv("DB_PASSWORD_TEST")
-	dbName := os.Getenv("DB_NAME_TEST")
+	dbNameTest := os.Getenv("DB_NAME_TEST")
+	dbPasswordTest := os.Getenv("DB_PASSWORD_TEST")
+	dbUserTest := os.Getenv("DB_USER_TEST")
 
-	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", dbHost, dbPort, dbUser, dbPass, dbName)
+	jwtSecretTest := "test-secret"
+	jwtAccessExpTest := "15m"
+	jwtRefreshExpTest := "60m"
 
-	db, err := postgres.NewPostgresDB(dsn)
+	authPort := freePort(t)
+
+	ctx := context.Background()
+
+	postgresContainer, err := postgres.Run(ctx,
+		"postgres:15-alpine",
+		postgres.WithDatabase(dbNameTest),
+		postgres.WithUsername(dbUserTest),
+		postgres.WithPassword(dbPasswordTest),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(30*time.Second),
+		),
+	)
+	require.NoError(t, err, "failed to start postgres container")
+
+	host, err := postgresContainer.Host(ctx)
+	require.NoError(t, err)
+
+	mappedPort, err := postgresContainer.MappedPort(ctx, "5432")
+	require.NoError(t, err)
+
+	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, mappedPort.Num(), dbUserTest, dbPasswordTest, dbNameTest)
+
+	db, err := posgresPkg.NewPostgresDB(dsn)
+	require.NoError(t, err, "failed to connect to test database")
+
+	applyMigrations(t, db)
+
+	authBin := buildBinary(t, filepath.Join(rootDir, "services", "auth", "cmd"), "auth-service")
+
+	dbEnv := []string{
+		"DB_HOST=" + host,
+		fmt.Sprintf("DB_PORT=%d", mappedPort.Num()),
+		"DB_USER=" + dbUserTest,
+		"DB_PASSWORD=" + dbPasswordTest,
+		"DB_NAME=" + dbNameTest,
+	}
+
+	authEnv := append(append([]string{}, dbEnv...),
+		"JWT_SECRET="+jwtSecretTest,
+		fmt.Sprintf("AUTH_GRPC_PORT=%d", authPort),
+		"JWT_ACCESS_TOKEN_EXPIRATION="+jwtAccessExpTest,
+		"JWT_REFRESH_TOKEN_EXPIRATION="+jwtRefreshExpTest,
+	)
+
+	authCmd := exec.Command(authBin)
+	authCmd.Dir = rootDir
+	authCmd.Stdout = os.Stdout
+	authCmd.Stderr = os.Stderr
+	authCmd.Env = append(os.Environ(), authEnv...)
+
+	require.NoError(t, authCmd.Start(), "failed to start auth service")
+	waitReady(t, fmt.Sprintf("127.0.0.1:%d", authPort), 30*time.Second)
+
+	return &TestEnvironment{
+		PostgresContainer: postgresContainer,
+		AuthServiceCmd:    authCmd,
+		DB:                db,
+		DSN:               dsn,
+	}
+}
+
+func (te *TestEnvironment) Cleanup(t *testing.T) {
+	killCmd(te.AuthServiceCmd)
+
+	if te.DB != nil {
+		_ = te.DB.Close()
+	}
+
+	if te.PostgresContainer != nil {
+		if err := te.PostgresContainer.Terminate(context.Background()); err != nil {
+			t.Logf("warning: failed to terminate postgres container: %v", err)
+		}
+	}
+}
+
+func applyMigrations(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	migrationsDir := filepath.Join(repoRoot(t), "migrations")
+
+	tables := []string{"users", "refresh_tokens"}
+	for _, table := range tables {
+		_, err := db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", table))
+		if err != nil {
+			t.Logf("Warning: failed to drop %s: %v", table, err)
+		}
+	}
+
+	entries, err := os.ReadDir(migrationsDir)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		t.Fatalf("read migrations dir: %v", err)
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".up.sql") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		t.Fatal("no .up.sql migrations found")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := db.PingContext(ctx); err != nil {
-		log.Fatalf("Failed to ping database: %v", err)
+	for _, n := range names {
+		body, err := os.ReadFile(filepath.Join(migrationsDir, n))
+		if err != nil {
+			t.Fatalf("read %s: %v", n, err)
+		}
+		if _, err := db.Exec(string(body)); err != nil {
+			t.Fatalf("apply migration %s: %v", n, err)
+		}
 	}
-	log.Println("Connected to TestPostgreSQL")
-	return db
 }
 
 func TestGRPCServiceAuth(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	logger := slog.New(slog.DiscardHandler)
-	authManager := NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	authManager := auth.NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 	ctxReq := context.Background()
 	email := "test@example.com"
@@ -90,7 +285,7 @@ func TestGRPCServiceAuth(t *testing.T) {
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Unauthenticated, st.Code())
+		assert.Equal(t, codes.InvalidArgument, st.Code())
 		assert.Equal(t, "invalid credentials", st.Message())
 	})
 
@@ -131,18 +326,17 @@ func TestGRPCServiceAuth(t *testing.T) {
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.Unauthenticated, st.Code())
-		assert.Equal(t, "refresh token has been revoked", st.Message())
+		assert.Equal(t, "invalid refresh token", st.Message())
 	})
 }
 
 func TestAuthCreateUser_Error(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	logger := slog.New(slog.DiscardHandler)
-	authManager := NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	authManager := auth.NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 	ctxReq := context.Background()
 
@@ -172,8 +366,8 @@ func TestAuthCreateUser_Error(t *testing.T) {
 
 		st, ok := status.FromError(err2)
 		require.True(t, ok)
-		assert.Equal(t, codes.AlreadyExists, st.Code())
-		assert.Equal(t, "email already registered", st.Message())
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Equal(t, "unable to create account", st.Message())
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
@@ -192,18 +386,17 @@ func TestAuthCreateUser_Error(t *testing.T) {
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.Internal, st.Code())
-		assert.Contains(t, st.Message(), "failed to create user: db create error:")
+		assert.Contains(t, st.Message(), "failed to create user")
 	})
 }
 
 func TestAuthSaveRefreshToken_Error(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	logger := slog.New(slog.DiscardHandler)
-	authManager := NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	authManager := auth.NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 	ctx := context.Background()
 	t.Run("ForeignKeyViolation", func(t *testing.T) {
@@ -213,7 +406,6 @@ func TestAuthSaveRefreshToken_Error(t *testing.T) {
 		err := repo.SaveRefreshToken(ctx, fakeUserID, tokenID, 24*time.Hour)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "violates foreign key constraint")
-		t.Logf("Got expected error ForeignKey: %v", err)
 	})
 
 	t.Run("DuplicateToken", func(t *testing.T) {
@@ -237,7 +429,6 @@ func TestAuthSaveRefreshToken_Error(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate key value")
-		t.Logf("Got expected error Unique: %v", err)
 	})
 
 	t.Run("ContextCancelled", func(t *testing.T) {
@@ -259,18 +450,16 @@ func TestAuthSaveRefreshToken_Error(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "context cancel")
-		t.Logf("Got expected error ctx cancel: %v", err)
 	})
 }
 
 func TestAuthGetUserByEmail_InvalidEmail(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	logger := slog.New(slog.DiscardHandler)
-	authManager := NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	authManager := auth.NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
 	ctx := context.Background()
 
@@ -302,11 +491,10 @@ func TestAuthGetUserByEmail_InvalidEmail(t *testing.T) {
 	assert.Contains(t, st.Message(), "invalid credentials")
 }
 func TestAuthGetUserByEmail_Success(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	ctx := context.Background()
 
 	expectedEmail := "success@test.com"
@@ -324,11 +512,10 @@ func TestAuthGetUserByEmail_Success(t *testing.T) {
 }
 
 func TestAuthGetUserByID_Success(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	ctx := context.Background()
 
 	userID, err := repo.CreateUser(ctx, "idtest@test.com", "ID Test User", "user", []byte("hash"))
@@ -341,11 +528,10 @@ func TestAuthGetUserByID_Success(t *testing.T) {
 }
 
 func TestAuthGetUserByID_NotFound(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	ctx := context.Background()
 
 	fakeUserID := uuid.New()
@@ -363,13 +549,12 @@ func TestAuthGetUserByID_NotFound(t *testing.T) {
 }
 
 func TestAuthRefreshToken(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	logger := slog.New(slog.DiscardHandler)
-	authManager := NewAuthManager(repo, logger, "test-secret", 1*time.Second, 7*24*time.Hour)
+	authManager := auth.NewAuthManager(repo, logger, "test-secret", 1*time.Second, 7*24*time.Hour)
 
 	ctx := context.Background()
 
@@ -427,11 +612,10 @@ func TestAuthRefreshToken(t *testing.T) {
 }
 
 func TestAuthIsRefreshTokenValid_Flows(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	ctx := context.Background()
 
 	userID, err := repo.CreateUser(ctx, "tokenvalid@test.com", "Token User", "user", []byte("hash"))
@@ -463,13 +647,12 @@ func TestAuthIsRefreshTokenValid_Flows(t *testing.T) {
 }
 
 func TestAuthRefreshToken_FullFlow(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	logger := slog.New(slog.DiscardHandler)
-	authManager := NewAuthManager(repo, logger, "test-secret", 2*time.Second, 7*24*time.Hour)
+	authManager := auth.NewAuthManager(repo, logger, "test-secret", 2*time.Second, 7*24*time.Hour)
 
 	ctx := context.Background()
 
@@ -495,13 +678,12 @@ func TestAuthRefreshToken_FullFlow(t *testing.T) {
 }
 
 func TestAuthValidateToken_FullFlow(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	logger := slog.New(slog.DiscardHandler)
-	authManager := NewAuthManager(repo, logger, "test-secret", 2*time.Second, 7*24*time.Hour)
+	authManager := auth.NewAuthManager(repo, logger, "test-secret", 2*time.Second, 7*24*time.Hour)
 
 	ctx := context.Background()
 
@@ -552,24 +734,23 @@ func TestAuthValidateToken_FullFlow(t *testing.T) {
 	assert.False(t, respValidate.IsValid)
 	st, ok = status.FromError(err)
 	require.True(t, ok)
-	assert.Equal(t, codes.Internal, st.Code())
-	assert.Equal(t, "token was revoked or invalid", st.Message())
+	assert.Equal(t, codes.Unauthenticated, st.Code())
+	assert.Equal(t, "invalid token", st.Message())
 }
 
 func TestAuthValidateToken_WrongSecret(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	logger := slog.New(slog.DiscardHandler)
-	manager := NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 	ctx := context.Background()
 
 	_, err := repo.CreateUser(ctx, "wrongsecret@test.com", "Test", "user", []byte("hash"))
 	require.NoError(t, err)
 
-	claims := &auth.AccessClaims{
+	claims := &jwtTokens.AccessClaims{
 		UserID: uuid.New().String(),
 		Email:  "wrongsecret@test.com",
 		Role:   "user",
@@ -592,20 +773,19 @@ func TestAuthValidateToken_WrongSecret(t *testing.T) {
 }
 
 func TestAuthValidateToken_RefreshTokenNotInDB(t *testing.T) {
-	db := ConnectTestDb()
-	defer db.Close()
-	defer func() { db.Exec("DELETE FROM refresh_tokens; DELETE FROM users;") }()
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
 
-	repo := repository.NewPostgresStorage(db)
+	repo := repository.NewPostgresStorage(env.DB)
 	logger := slog.New(slog.DiscardHandler)
-	manager := NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+	manager := auth.NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 	ctx := context.Background()
 
 	userID, err := repo.CreateUser(ctx, "notindb@test.com", "Test", "user", []byte("hash"))
 	require.NoError(t, err)
 
 	tokenID := "ghost-token-123"
-	claims := &auth.RefreshClaims{
+	claims := &jwtTokens.RefreshClaims{
 		UserID:  userID.String(),
 		TokenID: tokenID,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -623,6 +803,71 @@ func TestAuthValidateToken_RefreshTokenNotInDB(t *testing.T) {
 	assert.False(t, resp.IsValid)
 	st, ok := status.FromError(err)
 	require.True(t, ok)
-	assert.Equal(t, codes.Internal, st.Code())
-	assert.Equal(t, "token was revoked or invalid", st.Message())
+	assert.Equal(t, codes.Unauthenticated, st.Code())
+	assert.Equal(t, "invalid token", st.Message())
+}
+
+func TestAuthGetMe_Success(t *testing.T) {
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
+
+	repo := repository.NewPostgresStorage(env.DB)
+	logger := slog.New(slog.DiscardHandler)
+	authManager := auth.NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+
+	ctxReq := context.Background()
+	email := "test@example.com"
+	password := "testintegrationpassword135"
+	name := "username"
+
+	registerReq := &pb.RegisterRequest{
+		Email:    email,
+		Password: password,
+		Name:     name,
+	}
+
+	registerResp, err := authManager.Register(ctxReq, registerReq)
+	require.NoError(t, err)
+	require.NotNil(t, registerResp)
+
+	getMeReq := &pb.GetMeRequest{
+		UserId: registerResp.UserId,
+	}
+
+	getMeResp, err := authManager.GetMe(ctxReq, getMeReq)
+	require.NoError(t, err)
+	require.NotNil(t, getMeResp)
+
+	assert.Equal(t, registerResp.UserId, getMeResp.UserId)
+	assert.Equal(t, email, getMeResp.Email)
+	assert.Equal(t, name, getMeResp.Name)
+	assert.Equal(t, "user", getMeResp.Role)
+
+	createdAt, err := time.Parse(time.RFC3339, getMeResp.CreatedAt)
+	require.NoError(t, err)
+	assert.False(t, createdAt.IsZero())
+}
+
+func TestAuthGetMe_Errors(t *testing.T) {
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
+
+	repo := repository.NewPostgresStorage(env.DB)
+	logger := slog.New(slog.DiscardHandler)
+	authManager := auth.NewAuthManager(repo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
+
+	ctxReq := context.Background()
+
+	req := &pb.GetMeRequest{
+		UserId: uuid.NewString(),
+	}
+
+	resp, err := authManager.GetMe(ctxReq, req)
+	require.Error(t, err)
+	require.Nil(t, resp)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.NotFound, st.Code())
+	assert.Equal(t, "user not found", st.Message())
 }

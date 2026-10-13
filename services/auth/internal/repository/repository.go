@@ -88,7 +88,7 @@ func (ps *PostgresStorage) GetUserByID(ctx context.Context, userID uuid.UUID) (m
 
 	err := ps.db.QueryRowContext(
 		ctx,
-		`SELECT id, email, password_hash, role 
+		`SELECT id, email, password_hash, name, role, created_at
 		FROM users 
 		WHERE id = $1`,
 		userID,
@@ -96,7 +96,9 @@ func (ps *PostgresStorage) GetUserByID(ctx context.Context, userID uuid.UUID) (m
 		&usr.ID,
 		&usr.Email,
 		&usr.Password,
+		&usr.Name,
 		&usr.Role,
+		&usr.CreatedAt,
 	)
 
 	if err != nil {

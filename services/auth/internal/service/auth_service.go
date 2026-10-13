@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -138,23 +140,23 @@ func (m *AuthManager) Register(ctx context.Context, req *pb.RegisterRequest) (*p
 	pass, err := hashPass(req.Password, defaultArgon2Params)
 	if err != nil {
 		m.logger.Error("Failed to hash password", "email", req.Email, "error", err)
-		return nil, status.Errorf(codes.Internal, "failed to hash password: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to create account")
 	}
 
 	id, err := m.repo.CreateUser(ctx, req.Email, req.Name, "user", pass)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
 			m.logger.Warn("Registration failed: email already exists", "email", req.Email)
-			return nil, status.Error(codes.AlreadyExists, "email already registered")
+			return nil, status.Error(codes.InvalidArgument, "unable to create account")
 		}
 		m.logger.Error("Registration failed: database error", "email", req.Email, "error", err)
-		return nil, status.Errorf(codes.Internal, "failed to create user: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to create user")
 	}
 
 	tokens, err := m.createToken(ctx, id, req.Email, "user")
 	if err != nil {
 		m.logger.Error("Failed to create tokens after registration", "user_id", id.String(), "error", err)
-		return nil, status.Errorf(codes.Internal, "failed to create tokens: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to create tokens")
 	}
 
 	m.logger.Info("Registration successful", "user_id", id.String(), "email", req.Email)
@@ -168,8 +170,13 @@ func (m *AuthManager) Register(ctx context.Context, req *pb.RegisterRequest) (*p
 
 func (m *AuthManager) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginResponse, error) {
 	m.logger.Info("Login attempt", "email", req.Email)
-	if req.Email == "" || req.Password == "" {
-		return nil, status.Error(codes.InvalidArgument, "email and password are required")
+	if req.Email == "" {
+		m.logger.Warn("Login failed: empty email", "email", req.Email)
+		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
+	}
+	if req.Password == "" {
+		m.logger.Warn("Login failed: empty password", "email", req.Email)
+		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
 	}
 
 	usr, err := m.repo.GetUserByEmail(ctx, req.Email)
@@ -180,13 +187,13 @@ func (m *AuthManager) Login(ctx context.Context, req *pb.LoginRequest) (*pb.Logi
 
 	if !verifyPass(usr.Password, req.Password, defaultArgon2Params) {
 		m.logger.Warn("Login failed: invalid password", "email", req.Email)
-		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
+		return nil, status.Error(codes.InvalidArgument, "invalid credentials")
 	}
 
 	tokens, err := m.createToken(ctx, usr.ID, usr.Email, "user")
 	if err != nil {
 		m.logger.Error("Login failed: token creation error", "user_id", usr.ID.String(), "error", err)
-		return nil, status.Errorf(codes.Internal, "failed to create tokens: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to create tokens")
 	}
 
 	m.logger.Info("Login successful", "user_id", usr.ID.String(), "email", req.Email)
@@ -208,19 +215,23 @@ func (m *AuthManager) RefreshToken(ctx context.Context, req *pb.RefreshTokenRequ
 	userID, err := uuid.Parse(claims.UserID)
 	if err != nil {
 		m.logger.Error("Failed to parse user ID from token", "error", err)
-		return nil, status.Error(codes.Internal, "invalid user id")
+		return nil, status.Error(codes.Unauthenticated, "invalid refresh token")
 	}
 
 	isValid, err := m.repo.IsRefreshTokenValid(ctx, claims.TokenID, userID)
 	if err != nil || !isValid {
 		m.logger.Warn("Refresh token is revoked or invalid", "user_id", userID.String(), "token_id", claims.TokenID)
-		return nil, status.Error(codes.Unauthenticated, "refresh token has been revoked")
+		return nil, status.Error(codes.Unauthenticated, "invalid refresh token")
 	}
 
 	user, err := m.repo.GetUserByID(ctx, userID)
 	if err != nil {
-		m.logger.Error("Failed to get user by ID during refresh", "user_id", userID.String(), "error", err)
-		return nil, status.Error(codes.Internal, "user not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			m.logger.Error("User not found by ID", "user_id", userID.String(), "error", err)
+			return nil, status.Error(codes.NotFound, "user not found")
+		}
+		m.logger.Error("Failed to get user by ID", "user_id", userID.String(), "error", err)
+		return nil, status.Error(codes.Internal, "failed to get user")
 	}
 
 	accessToken, err := jwtTokens.CreateAccessToken(
@@ -232,7 +243,7 @@ func (m *AuthManager) RefreshToken(ctx context.Context, req *pb.RefreshTokenRequ
 	)
 	if err != nil {
 		m.logger.Error("Failed to create new access token", "user_id", userID.String(), "error", err)
-		return nil, status.Errorf(codes.Internal, "failed to create access token: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to create access token")
 	}
 
 	m.logger.Info("Access token refreshed successfully", "user_id", userID.String())
@@ -284,20 +295,24 @@ func (m *AuthManager) ValidateToken(ctx context.Context, req *pb.ValidateTokenRe
 	if refreshErr == nil {
 		userID, parseErr := uuid.Parse(refreshClaims.UserID)
 		if parseErr != nil {
-			m.logger.Error("Failed to parse user ID from refresh token", "error", parseErr)
+			m.logger.Error("Failed to parse user ID from refresh token", "user_id", userID.String(), "error", parseErr)
 			return &pb.ValidateTokenResponse{IsValid: false}, status.Error(codes.Internal, "invalid user id")
 		}
 
 		isValid, dbErr := m.repo.IsRefreshTokenValid(ctx, refreshClaims.TokenID, userID)
 		if dbErr != nil || !isValid {
 			m.logger.Warn("Refresh token is revoked", "user_id", refreshClaims.UserID)
-			return &pb.ValidateTokenResponse{IsValid: false}, status.Errorf(codes.Internal, "token was revoked or invalid")
+			return &pb.ValidateTokenResponse{IsValid: false}, status.Errorf(codes.Unauthenticated, "invalid token")
 		}
 
 		user, userErr := m.repo.GetUserByID(ctx, userID)
 		if userErr != nil {
-			m.logger.Error("Failed to get user by ID", "error", userErr)
-			return &pb.ValidateTokenResponse{IsValid: false}, status.Error(codes.Internal, "failed to get user")
+			if errors.Is(userErr, sql.ErrNoRows) {
+				m.logger.Error("User not found by ID", "user_id", userID.String(), "error", err)
+				return &pb.ValidateTokenResponse{IsValid: false}, status.Error(codes.Unauthenticated, "invalid token")
+			}
+			m.logger.Error("Failed to get user by ID", "user_id", userID.String(), "error", err)
+			return &pb.ValidateTokenResponse{IsValid: false}, status.Error(codes.Unauthenticated, "invalid token")
 		}
 
 		m.logger.Info("Refresh token validated", "user_id", refreshClaims.UserID)
@@ -313,4 +328,36 @@ func (m *AuthManager) ValidateToken(ctx context.Context, req *pb.ValidateTokenRe
 	return &pb.ValidateTokenResponse{
 		IsValid: false,
 	}, status.Error(codes.Unauthenticated, "invalid token")
+}
+
+func (m *AuthManager) GetMe(ctx context.Context, req *pb.GetMeRequest) (*pb.GetMeResponse, error) {
+	m.logger.Info("GetMe request", "userID", req.UserId)
+
+	if req.UserId == "" {
+		m.logger.Error("getMe request without user_id")
+		return nil, status.Error(codes.InvalidArgument, "user_id is required")
+	}
+	userID, err := uuid.Parse(req.UserId)
+	if err != nil {
+		m.logger.Error("Failed to parse user ID from getMe request", "user_id", userID.String(), "error", err)
+		return &pb.GetMeResponse{}, status.Error(codes.Internal, "invalid user id")
+	}
+
+	user, err := m.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			m.logger.Error("User not found by ID", "user_id", userID.String(), "error", err)
+			return nil, status.Error(codes.NotFound, "user not found")
+		}
+		m.logger.Error("Failed to get user by ID", "user_id", userID.String(), "error", err)
+		return nil, status.Error(codes.Internal, "failed to get user")
+	}
+
+	return &pb.GetMeResponse{
+		UserId:    user.ID.String(),
+		Email:     user.Email,
+		Name:      user.Name,
+		Role:      user.Role,
+		CreatedAt: user.CreatedAt.Format(time.RFC3339),
+	}, nil
 }

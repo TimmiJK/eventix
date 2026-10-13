@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"eventix/pkg/helpers"
 	"eventix/pkg/postgres"
 	"eventix/proto/auth/pb"
 	storage "eventix/services/auth/internal/repository"
@@ -12,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -32,12 +34,19 @@ type DB struct {
 }
 
 func main() {
-	if err := godotenv.Load("./.env"); err != nil {
+	rootDir := helpers.RepoRoot("env")
+	if err := godotenv.Load(filepath.Join(rootDir, ".env")); err != nil {
 		log.Println(" .env file not found, using environment variables")
 	}
 
+	logPath := os.Getenv("LOG_FILE_PATH_AUTH")
+	if logPath == "" {
+		authDir := helpers.RepoRoot("log")
+		logPath = authDir + "/logs/auth-service.log"
+	}
+
 	logWriter := &lumberjack.Logger{
-		Filename:   "services/auth/logs/auth-service.log",
+		Filename:   logPath,
 		MaxSize:    100,
 		MaxBackups: 3,
 		MaxAge:     28,
