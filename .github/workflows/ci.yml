@@ -131,6 +131,10 @@ jobs:
 
     env:
       TESTCONTAINERS_RYUK_DISABLED: "true"
+      DB_NAME_TEST: eventix_test
+      DB_USER_TEST: test
+      DB_PASSWORD_TEST: test
+      CGO_ENABLED: 1
     steps:
       - uses: actions/checkout@v4
 
@@ -167,7 +171,7 @@ jobs:
           DB_NAME_TEST: eventix_test
           DB_USER_TEST: test
           DB_PASSWORD_TEST: test
-          CGO_ENABLED: 0
+          CGO_ENABLED: 1
           
     steps:
       - uses: actions/checkout@v4
