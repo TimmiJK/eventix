@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"eventix/pkg/helpers"
 	"eventix/pkg/postgres"
 	"eventix/proto/catalog/pb"
+	"eventix/services/catalog/internal/interceptor"
 	"eventix/services/catalog/internal/repository"
 	service "eventix/services/catalog/internal/service"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -32,13 +35,15 @@ type DB struct {
 }
 
 func main() {
-	if err := godotenv.Load("./.env"); err != nil {
+	rootDir := helpers.RepoRoot("env")
+	if err := godotenv.Load(filepath.Join(rootDir, ".env")); err != nil {
 		log.Println(" .env file not found, using environment variables")
 	}
 
 	logPath := os.Getenv("LOG_FILE_PATH_CATALOG")
 	if logPath == "" {
-		logPath = "logs/catalog-service.log"
+		catalogDir := helpers.RepoRoot("log")
+		logPath = catalogDir + "logs/catalog-service.log"
 	}
 
 	logWriter := &lumberjack.Logger{
@@ -56,6 +61,8 @@ func main() {
 	dbParam.dbUser = os.Getenv("DB_USER")
 	dbParam.dbPass = os.Getenv("DB_PASSWORD")
 	dbParam.dbName = os.Getenv("DB_NAME")
+
+	jwtSecret := os.Getenv("JWT_SECRET")
 
 	grpcPort := os.Getenv("CATALOG_GRPC_PORT")
 
@@ -85,7 +92,11 @@ func main() {
 	repo := repository.NewPostgresStorage(db)
 	catalogManager := service.NewCatalogManager(repo, logger)
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(
+			interceptor.AuthInterceptor(jwtSecret),
+		),
+	)
 	pb.RegisterCatalogServiceServer(grpcServer, catalogManager)
 
 	healthServer := health.NewServer()
