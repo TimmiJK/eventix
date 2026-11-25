@@ -14,9 +14,11 @@ message Event {
     string event_date = 5;
     int32 total_seats = 6;
     int32 available_seats = 7;
-    double price = 8;
+    int64 price_minor = 8;
     string created_at = 9;
     string updated_at = 10;
+    string currency = 11;
+    int64 version = 12;
 }
 
 message GetEventRequest {
@@ -46,7 +48,8 @@ message CreateEventRequest {
     string venue = 3;
     string event_date = 4;
     int32 total_seats = 5;
-    double price = 6;   
+    int64 price_minor = 6;
+    string currency = 7;  
 }
 
 message CreateEventResponse {
@@ -60,8 +63,10 @@ message UpdateEventRequest {
     string venue = 4;
     string event_date = 5;
     int32 total_seats = 6;
-    double price = 7;
+    int64 price_minor = 7;
     google.protobuf.FieldMask update_mask = 8;
+    string currency = 9;
+    int64 expected_version = 10;
 }
 
 message UpdateEventResponse {
@@ -70,6 +75,7 @@ message UpdateEventResponse {
 
 message DeleteEventRequest {
     string event_id = 1;
+    int64 expected_version = 2;
 }
 
 message DeleteEventResponse {
