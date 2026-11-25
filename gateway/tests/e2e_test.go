@@ -868,7 +868,7 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Error(t *testing.T) {
 		require.NotEmpty(t, resp.Errors)
 		require.Nil(t, resp.Data)
 
-		assert.Equal(t, "event already created", resp.Errors[0].Message)
+		assert.Equal(t, "event title already exists", resp.Errors[0].Message)
 		err, ok := resp.Errors[0].Extensions["code"].(string)
 		require.True(t, ok, "no 'code' field in Extensions: %v", resp.Errors[0].Extensions)
 		assert.Equal(t, "CONFLICT", err)
