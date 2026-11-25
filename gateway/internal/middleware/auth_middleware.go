@@ -28,8 +28,13 @@ func AuthMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 				return
 			}
 
-			token := strings.TrimPrefix(authHeader, "Bearer ")
+			parts := strings.Fields(authHeader)
+			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+				http.Error(w, "Unauthorized: invalid or expired token", http.StatusUnauthorized)
+				return
+			}
 
+			token := parts[1]
 			claims, err := jwtTokens.ValidateAccessToken(token, jwttoken)
 			if err != nil {
 				logger.Warn("Invalid access token in middleware", "error", err)
@@ -39,6 +44,7 @@ func AuthMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			ctx := context.WithValue(r.Context(), UserIDContextKey, claims.UserID)
 			ctx = context.WithValue(ctx, RoleContextKey, claims.Role)
+			ctx = context.WithValue(ctx, "accessTokenKey", token)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

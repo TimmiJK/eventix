@@ -17,7 +17,8 @@ input CreateEventInput {
     venue: String!
     eventDate: Time!
     totalSeats: Int!
-    price: Float!
+    priceMinor: Int64!
+    currency: String!
 }
 
 enum EventField {
@@ -26,7 +27,8 @@ enum EventField {
     venue
     eventDate
     totalSeats
-    price
+    priceMinor
+    currency
 }
 
 input UpdateEventInput {
@@ -35,8 +37,10 @@ input UpdateEventInput {
     venue: String
     eventDate: Time
     totalSeats: Int
-    price: Float
+    priceMinor: Int64
     updateMask: [EventField!]
+    currency: String
+    expectedVersion: Int64!
 }
 
 input ListEventsInput {
@@ -44,6 +48,8 @@ input ListEventsInput {
     pageSize: Int!
     searchQuery: String
 }
+
+scalar Int64
 
 type Event {
     id: ID!
@@ -53,9 +59,11 @@ type Event {
     eventDate: Time!
     totalSeats: Int!
     availableSeats: Int!
-    price: Float!
+    priceMinor: Int64!
     createdAt: Time
     updatedAt: Time
+    currency: String!
+    version: Int64!
 }
 
 type EventList {
@@ -72,17 +80,36 @@ type AuthPayload {
     expiresIn: Int!
 }
 
+type GetMePayload {
+    userId: ID!
+    email: String!
+    name: String!
+    role: String!
+    createdAt: String!
+}
+
+input RefreshTokenInput {
+    refreshToken: String!
+}
+
+type RefreshTokenPayload {
+    accessToken: String!
+    expiresIn: Int!
+}
+
 type Query {
     getEvent(id: ID!): Event!
     listEvents(input: ListEventsInput!): EventList!
+    getMe: GetMePayload!
 }
 
 type Mutation {
     register(input: RegisterInput!): AuthPayload!
     login(input: LoginInput!): AuthPayload!
     logout(refreshToken: String!): Boolean!
+    refreshToken(input: RefreshTokenInput!): RefreshTokenPayload!
     
     createEvent(input: CreateEventInput!): Event!
     updateEvent(id: ID!, input: UpdateEventInput!): Event!
-    deleteEvent(id: ID!): Boolean!
+    deleteEvent(id: ID!, expectedVersion: Int64!): Boolean!
 }

@@ -14,7 +14,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 type MockAuthClient struct {
@@ -23,6 +27,7 @@ type MockAuthClient struct {
 	MockLogout        func(ctx context.Context, in *authPb.LogoutRequest, opts ...grpc.CallOption) (*authPb.LogoutResponse, error)
 	MockRefreshToken  func(ctx context.Context, in *authPb.RefreshTokenRequest, opts ...grpc.CallOption) (*authPb.RefreshTokenResponse, error)
 	MockValidateToken func(ctx context.Context, in *authPb.ValidateTokenRequest, opts ...grpc.CallOption) (*authPb.ValidateTokenResponse, error)
+	MockGetMe         func(ctx context.Context, in *authPb.GetMeRequest, opts ...grpc.CallOption) (*authPb.GetMeResponse, error)
 }
 
 func (m *MockAuthClient) Register(ctx context.Context, in *authPb.RegisterRequest, opts ...grpc.CallOption) (*authPb.RegisterResponse, error) {
@@ -43,6 +48,10 @@ func (m *MockAuthClient) RefreshToken(ctx context.Context, in *authPb.RefreshTok
 
 func (m *MockAuthClient) ValidateToken(ctx context.Context, in *authPb.ValidateTokenRequest, opts ...grpc.CallOption) (*authPb.ValidateTokenResponse, error) {
 	return m.MockValidateToken(ctx, in, opts...)
+}
+
+func (m *MockAuthClient) GetMe(ctx context.Context, in *authPb.GetMeRequest, opts ...grpc.CallOption) (*authPb.GetMeResponse, error) {
+	return m.MockGetMe(ctx, in, opts...)
 }
 
 type MockCatalogClient struct {
@@ -217,10 +226,20 @@ func TestAuthResolver_Error(t *testing.T) {
 	})
 }
 
+func catalogResolverContext() context.Context {
+	return context.WithValue(context.Background(), "accessTokenKey", "test-access-token")
+}
+
 func TestCatalogResolvers_Success(t *testing.T) {
+	assertBearer := func(ctx context.Context) {
+		md, ok := metadata.FromOutgoingContext(ctx)
+		assert.True(t, ok)
+		assert.Equal(t, []string{"Bearer test-access-token"}, md.Get("authorization"))
+	}
 	mockAuth := &MockAuthClient{}
 	mockCatalog := &MockCatalogClient{
 		MockCreateEvent: func(ctx context.Context, in *catalogPb.CreateEventRequest, opts ...grpc.CallOption) (*catalogPb.CreateEventResponse, error) {
+			assertBearer(ctx)
 			return &catalogPb.CreateEventResponse{
 				Event: &catalogPb.Event{
 					Id:             "newID-12355",
@@ -230,30 +249,38 @@ func TestCatalogResolvers_Success(t *testing.T) {
 					EventDate:      in.EventDate,
 					TotalSeats:     in.TotalSeats,
 					AvailableSeats: in.TotalSeats,
-					Price:          in.Price,
+					PriceMinor:     in.PriceMinor,
+					Currency:       in.Currency,
+					Version:        1,
 				},
 			}, nil
 		},
 		MockUpdateEvent: func(ctx context.Context, in *catalogPb.UpdateEventRequest, opts ...grpc.CallOption) (*catalogPb.UpdateEventResponse, error) {
-			assert.Equal(t, "New Event", in.Title)
-			assert.Equal(t, "Something about event", in.Description)
-			assert.Equal(t, "2026-05-05T21:00:00Z", in.EventDate)
-			assert.Equal(t, 99.99, in.Price)
+			assertBearer(ctx)
+			assert.Empty(t, in.Title)
+			assert.Empty(t, in.Description)
+			assert.Empty(t, in.EventDate)
+			assert.Zero(t, in.PriceMinor)
+			assert.Equal(t, int64(1), in.ExpectedVersion)
+			assert.Equal(t, []string{"venue", "total_seats"}, in.GetUpdateMask().GetPaths())
 
 			return &catalogPb.UpdateEventResponse{
 				Event: &catalogPb.Event{
 					Id:             in.EventId,
-					Title:          in.Title,
-					Description:    in.Description,
+					Title:          "New Event",
+					Description:    "Something about event",
 					Venue:          in.Venue,
-					EventDate:      in.EventDate,
+					EventDate:      "2026-05-05T21:00:00Z",
 					TotalSeats:     in.TotalSeats,
 					AvailableSeats: in.TotalSeats,
-					Price:          in.Price,
+					PriceMinor:     9999,
+					Currency:       "RUB",
+					Version:        2,
 				},
 			}, nil
 		},
 		MockDeleteEvent: func(ctx context.Context, in *catalogPb.DeleteEventRequest, opts ...grpc.CallOption) (*catalogPb.DeleteEventResponse, error) {
+			assertBearer(ctx)
 			assert.Equal(t, "newID-12355", in.EventId)
 
 			return &catalogPb.DeleteEventResponse{
@@ -272,7 +299,7 @@ func TestCatalogResolvers_Success(t *testing.T) {
 					EventDate:      "2026-05-05T21:00:00Z",
 					TotalSeats:     150,
 					AvailableSeats: 150,
-					Price:          99.99,
+					PriceMinor:     9999,
 				},
 			}, nil
 		},
@@ -291,7 +318,7 @@ func TestCatalogResolvers_Success(t *testing.T) {
 	venue := "Los-Angeles"
 	eventDate := time.Date(2026, time.May, 5, 21, 00, 00, 00, time.UTC)
 	totalSeats := 150
-	price := 99.99
+	price := int64(9999)
 	t.Run("CreateEvent", func(t *testing.T) {
 		createEventInput := model.CreateEventInput{
 			Title:       title,
@@ -299,10 +326,12 @@ func TestCatalogResolvers_Success(t *testing.T) {
 			Venue:       venue,
 			EventDate:   eventDate,
 			TotalSeats:  int32(totalSeats),
-			Price:       price,
+			PriceMinor:  price,
+			Currency:    "RUB",
 		}
 
-		result, err := resolver.Mutation().CreateEvent(context.Background(), createEventInput)
+		ctx := catalogResolverContext()
+		result, err := resolver.Mutation().CreateEvent(ctx, createEventInput)
 
 		require.NoError(t, err)
 		assert.Equal(t, "newID-12355", result.ID)
@@ -312,8 +341,10 @@ func TestCatalogResolvers_Success(t *testing.T) {
 		assert.Equal(t, eventDate, result.EventDate)
 		assert.Equal(t, int32(totalSeats), result.TotalSeats)
 		assert.Equal(t, int32(totalSeats), result.AvailableSeats)
-		assert.Equal(t, price, result.Price)
+		assert.Equal(t, price, result.PriceMinor)
 
+		assert.Equal(t, int64(1), result.Version)
+		assert.Equal(t, "RUB", result.Currency)
 		eventID = result.ID
 	})
 
@@ -322,16 +353,18 @@ func TestCatalogResolvers_Success(t *testing.T) {
 		newTotalSeats := int32(500)
 
 		updateEventInput := model.UpdateEventInput{
-			Title:       &title,
-			Description: &description,
-			Venue:       &newVenue,
-			EventDate:   &eventDate,
-			TotalSeats:  &newTotalSeats,
-			Price:       &price,
-			UpdateMask:  []model.EventField{"venue", "totalSeats"},
+			Title:           &title,
+			Description:     &description,
+			Venue:           &newVenue,
+			EventDate:       &eventDate,
+			TotalSeats:      &newTotalSeats,
+			PriceMinor:      &price,
+			ExpectedVersion: 1,
+			UpdateMask:      []model.EventField{"venue", "totalSeats"},
 		}
 
-		result, err := resolver.Mutation().UpdateEvent(context.Background(), eventID, updateEventInput)
+		ctx := catalogResolverContext()
+		result, err := resolver.Mutation().UpdateEvent(ctx, eventID, updateEventInput)
 
 		require.NoError(t, err)
 		assert.Equal(t, eventID, result.ID)
@@ -341,15 +374,42 @@ func TestCatalogResolvers_Success(t *testing.T) {
 		assert.Equal(t, eventDate, result.EventDate)
 		assert.Equal(t, newTotalSeats, result.TotalSeats)
 		assert.Equal(t, newTotalSeats, result.AvailableSeats)
-		assert.Equal(t, price, result.Price)
+		assert.Equal(t, price, result.PriceMinor)
 	})
 
 	t.Run("DeleteEvent", func(t *testing.T) {
-		result, err := resolver.Mutation().DeleteEvent(context.Background(), eventID)
+		ctx := catalogResolverContext()
+		result, err := resolver.Mutation().DeleteEvent(ctx, eventID, 2)
 
 		require.NoError(t, err)
 		assert.True(t, result)
 	})
+}
+
+func TestCatalogResolvers_UpdateEvent_InfersMaskAndFormatsDate(t *testing.T) {
+	eventDate := time.Date(2030, time.January, 1, 21, 0, 0, 0, time.FixedZone("UTC+3", 3*60*60))
+	description := ""
+	client := &MockCatalogClient{
+		MockUpdateEvent: func(ctx context.Context, in *catalogPb.UpdateEventRequest, opts ...grpc.CallOption) (*catalogPb.UpdateEventResponse, error) {
+			assert.Equal(t, int64(7), in.GetExpectedVersion())
+			assert.Equal(t, []string{"description", "event_date"}, in.GetUpdateMask().GetPaths())
+			assert.Equal(t, "2030-01-01T21:00:00+03:00", in.GetEventDate())
+			assert.Empty(t, in.GetDescription())
+			return &catalogPb.UpdateEventResponse{
+				Event: &catalogPb.Event{
+					Id: in.GetEventId(), EventDate: in.GetEventDate(), Version: 8,
+				},
+			}, nil
+		},
+	}
+	resolver := &graph.Resolver{Clients: &grpcclients.Clients{Catalog: client}}
+
+	result, err := resolver.Mutation().UpdateEvent(catalogResolverContext(), "event-id", model.UpdateEventInput{
+		Description: &description, EventDate: &eventDate, ExpectedVersion: 7,
+	})
+	require.NoError(t, err)
+	assert.True(t, eventDate.Equal(result.EventDate))
+	assert.Equal(t, int64(8), result.Version)
 }
 
 func TestCatalogResolvers_Error(t *testing.T) {
@@ -374,7 +434,7 @@ func TestCatalogResolvers_Error(t *testing.T) {
 					EventDate:      "2026-05-05T21:00:00Z",
 					TotalSeats:     150,
 					AvailableSeats: 150,
-					Price:          99.99,
+					PriceMinor:     9999,
 				},
 			}, nil
 		},
@@ -392,7 +452,7 @@ func TestCatalogResolvers_Error(t *testing.T) {
 	venue := "Los-Angeles"
 	eventDate := time.Date(2026, time.May, 5, 21, 00, 00, 00, time.Local)
 	totalSeats := int32(150)
-	price := 99.99
+	price := int64(9999)
 	t.Run("CreateEventError", func(t *testing.T) {
 		createEventInput := model.CreateEventInput{
 			Title:       title,
@@ -400,10 +460,11 @@ func TestCatalogResolvers_Error(t *testing.T) {
 			Venue:       venue,
 			EventDate:   eventDate,
 			TotalSeats:  totalSeats,
-			Price:       price,
+			PriceMinor:  price,
+			Currency:    "RUB",
 		}
 
-		result, err := resolver.Mutation().CreateEvent(context.Background(), createEventInput)
+		result, err := resolver.Mutation().CreateEvent(catalogResolverContext(), createEventInput)
 		require.Error(t, err)
 		assert.Empty(t, result)
 
@@ -412,15 +473,16 @@ func TestCatalogResolvers_Error(t *testing.T) {
 
 	t.Run("UpdateEventError", func(t *testing.T) {
 		updateEventInput := model.UpdateEventInput{
-			Title:       &title,
-			Description: &description,
-			Venue:       &venue,
-			EventDate:   &eventDate,
-			TotalSeats:  &totalSeats,
-			Price:       &price,
+			Title:           &title,
+			Description:     &description,
+			Venue:           &venue,
+			EventDate:       &eventDate,
+			TotalSeats:      &totalSeats,
+			PriceMinor:      &price,
+			ExpectedVersion: 1,
 		}
 
-		result, err := resolver.Mutation().UpdateEvent(context.Background(), "event-id-1433", updateEventInput)
+		result, err := resolver.Mutation().UpdateEvent(catalogResolverContext(), "event-id-1433", updateEventInput)
 		require.Error(t, err)
 		assert.Empty(t, result)
 
@@ -428,7 +490,7 @@ func TestCatalogResolvers_Error(t *testing.T) {
 	})
 
 	t.Run("DeleteEventError", func(t *testing.T) {
-		result, err := resolver.Mutation().DeleteEvent(context.Background(), "event-id-1433")
+		result, err := resolver.Mutation().DeleteEvent(catalogResolverContext(), "event-id-1433", 1)
 
 		require.Error(t, err)
 		assert.False(t, result)
@@ -452,7 +514,7 @@ func TestGetEventResolvers_Success(t *testing.T) {
 					EventDate:      "2025-12-31T20:00:00Z",
 					TotalSeats:     1000,
 					AvailableSeats: 670,
-					Price:          412.12,
+					PriceMinor:     41212,
 				},
 			}, nil
 		},
@@ -475,7 +537,7 @@ func TestGetEventResolvers_Success(t *testing.T) {
 	assert.Equal(t, time.Date(2025, 12, 31, 20, 00, 00, 00, time.UTC), result.EventDate)
 	assert.Equal(t, int32(1000), result.TotalSeats)
 	assert.Equal(t, int32(670), result.AvailableSeats)
-	assert.Equal(t, 412.12, result.Price)
+	assert.Equal(t, int64(41212), result.PriceMinor)
 }
 
 func TestGetEventResolvers_Error(t *testing.T) {
@@ -510,7 +572,7 @@ func TestListEventsResolvers_Success(t *testing.T) {
 			EventDate:      "2025-10-25T20:00:00Z",
 			TotalSeats:     int32(500),
 			AvailableSeats: int32(500),
-			Price:          150.50,
+			PriceMinor:     15050,
 		},
 		&catalogPb.Event{
 			Id:             "event-id-2",
@@ -520,7 +582,7 @@ func TestListEventsResolvers_Success(t *testing.T) {
 			EventDate:      "2025-12-31T20:00:00Z",
 			TotalSeats:     int32(1567),
 			AvailableSeats: int32(1200),
-			Price:          99.99,
+			PriceMinor:     9999,
 		},
 	}
 	mockAuth := &MockAuthClient{}
@@ -568,7 +630,7 @@ func TestListEventsResolvers_Success(t *testing.T) {
 		assert.Equal(t, parseDate, event.EventDate)
 		assert.Equal(t, testData[i].TotalSeats, event.TotalSeats)
 		assert.Equal(t, testData[i].AvailableSeats, event.AvailableSeats)
-		assert.Equal(t, testData[i].Price, event.Price)
+		assert.Equal(t, testData[i].PriceMinor, event.PriceMinor)
 	}
 }
 
@@ -621,4 +683,59 @@ func TestGetEventResolvers_NotFoundError(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, result)
 	assert.Contains(t, strings.ToLower(err.Error()), "not found")
+}
+
+func TestGetMeResolver_Success(t *testing.T) {
+	mockAuth := &MockAuthClient{
+		MockGetMe: func(ctx context.Context, in *authPb.GetMeRequest, _ ...grpc.CallOption) (*authPb.GetMeResponse, error) {
+			require.NotNil(t, in)
+			md, ok := metadata.FromOutgoingContext(ctx)
+			require.True(t, ok)
+			assert.Equal(t, []string{"Bearer test-access-token"}, md.Get("authorization"))
+			return &authPb.GetMeResponse{
+				UserId: "test-user", Email: "test@example.com", Name: "Test User",
+				Role: "user", CreatedAt: "2026-05-05T21:00:00Z",
+			}, nil
+		},
+	}
+	resolver := graph.NewResolver(&grpcclients.Clients{Auth: mockAuth})
+	ctx := context.WithValue(context.Background(), "accessTokenKey", "test-access-token")
+
+	resp, err := resolver.Query().GetMe(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, &model.GetMePayload{
+		UserID: "test-user", Email: "test@example.com", Name: "Test User",
+		Role: "user", CreatedAt: "2026-05-05T21:00:00Z",
+	}, resp)
+}
+
+func TestGetMeResolver_Error(t *testing.T) {
+	t.Run("MissingAccessToken", func(t *testing.T) {
+		resolver := graph.NewResolver(&grpcclients.Clients{Auth: &MockAuthClient{}})
+		resp, err := resolver.Query().GetMe(context.Background())
+		require.Error(t, err)
+		assert.Nil(t, resp)
+		var gqlErr *gqlerror.Error
+		require.ErrorAs(t, err, &gqlErr)
+		assert.Equal(t, "UNAUTHORIZED", gqlErr.Extensions["code"])
+		assert.Equal(t, "authentication required", gqlErr.Message)
+	})
+
+	t.Run("AuthRejectsToken", func(t *testing.T) {
+		mockAuth := &MockAuthClient{
+			MockGetMe: func(context.Context, *authPb.GetMeRequest, ...grpc.CallOption) (*authPb.GetMeResponse, error) {
+				return nil, status.Error(codes.Unauthenticated, "invalid access token")
+			},
+		}
+		resolver := graph.NewResolver(&grpcclients.Clients{Auth: mockAuth})
+		ctx := context.WithValue(context.Background(), "accessTokenKey", "test-access-token")
+
+		resp, err := resolver.Query().GetMe(ctx)
+		require.Error(t, err)
+		assert.Nil(t, resp)
+		var gqlErr *gqlerror.Error
+		require.ErrorAs(t, err, &gqlErr)
+		assert.Equal(t, "UNAUTHORIZED", gqlErr.Extensions["code"])
+		assert.Equal(t, "invalid access token", gqlErr.Message)
+	})
 }

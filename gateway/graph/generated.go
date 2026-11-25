@@ -48,14 +48,16 @@ type ComplexityRoot struct {
 	Event struct {
 		AvailableSeats func(childComplexity int) int
 		CreatedAt      func(childComplexity int) int
+		Currency       func(childComplexity int) int
 		Description    func(childComplexity int) int
 		EventDate      func(childComplexity int) int
 		ID             func(childComplexity int) int
-		Price          func(childComplexity int) int
+		PriceMinor     func(childComplexity int) int
 		Title          func(childComplexity int) int
 		TotalSeats     func(childComplexity int) int
 		UpdatedAt      func(childComplexity int) int
 		Venue          func(childComplexity int) int
+		Version        func(childComplexity int) int
 	}
 
 	EventList struct {
@@ -65,18 +67,33 @@ type ComplexityRoot struct {
 		TotalCount func(childComplexity int) int
 	}
 
+	GetMePayload struct {
+		CreatedAt func(childComplexity int) int
+		Email     func(childComplexity int) int
+		Name      func(childComplexity int) int
+		Role      func(childComplexity int) int
+		UserID    func(childComplexity int) int
+	}
+
 	Mutation struct {
-		CreateEvent func(childComplexity int, input model.CreateEventInput) int
-		DeleteEvent func(childComplexity int, id string) int
-		Login       func(childComplexity int, input model.LoginInput) int
-		Logout      func(childComplexity int, refreshToken string) int
-		Register    func(childComplexity int, input model.RegisterInput) int
-		UpdateEvent func(childComplexity int, id string, input model.UpdateEventInput) int
+		CreateEvent  func(childComplexity int, input model.CreateEventInput) int
+		DeleteEvent  func(childComplexity int, id string, expectedVersion int64) int
+		Login        func(childComplexity int, input model.LoginInput) int
+		Logout       func(childComplexity int, refreshToken string) int
+		RefreshToken func(childComplexity int, input model.RefreshTokenInput) int
+		Register     func(childComplexity int, input model.RegisterInput) int
+		UpdateEvent  func(childComplexity int, id string, input model.UpdateEventInput) int
 	}
 
 	Query struct {
 		GetEvent   func(childComplexity int, id string) int
+		GetMe      func(childComplexity int) int
 		ListEvents func(childComplexity int, input model.ListEventsInput) int
+	}
+
+	RefreshTokenPayload struct {
+		AccessToken func(childComplexity int) int
+		ExpiresIn   func(childComplexity int) int
 	}
 }
 
@@ -88,13 +105,15 @@ type MutationResolver interface {
 	Register(ctx context.Context, input model.RegisterInput) (*model.AuthPayload, error)
 	Login(ctx context.Context, input model.LoginInput) (*model.AuthPayload, error)
 	Logout(ctx context.Context, refreshToken string) (bool, error)
+	RefreshToken(ctx context.Context, input model.RefreshTokenInput) (*model.RefreshTokenPayload, error)
 	CreateEvent(ctx context.Context, input model.CreateEventInput) (*model.Event, error)
 	UpdateEvent(ctx context.Context, id string, input model.UpdateEventInput) (*model.Event, error)
-	DeleteEvent(ctx context.Context, id string) (bool, error)
+	DeleteEvent(ctx context.Context, id string, expectedVersion int64) (bool, error)
 }
 type QueryResolver interface {
 	GetEvent(ctx context.Context, id string) (*model.Event, error)
 	ListEvents(ctx context.Context, input model.ListEventsInput) (*model.EventList, error)
+	GetMe(ctx context.Context) (*model.GetMePayload, error)
 }
 
 // endregion ************************** generated!.gotpl **************************
@@ -152,6 +171,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Event.CreatedAt(childComplexity), true
+	case "Event.currency":
+		if e.ComplexityRoot.Event.Currency == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Event.Currency(childComplexity), true
 	case "Event.description":
 		if e.ComplexityRoot.Event.Description == nil {
 			break
@@ -170,12 +195,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Event.ID(childComplexity), true
-	case "Event.price":
-		if e.ComplexityRoot.Event.Price == nil {
+	case "Event.priceMinor":
+		if e.ComplexityRoot.Event.PriceMinor == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Event.Price(childComplexity), true
+		return e.ComplexityRoot.Event.PriceMinor(childComplexity), true
 	case "Event.title":
 		if e.ComplexityRoot.Event.Title == nil {
 			break
@@ -200,6 +225,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Event.Venue(childComplexity), true
+	case "Event.version":
+		if e.ComplexityRoot.Event.Version == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Event.Version(childComplexity), true
 
 	case "EventList.events":
 		if e.ComplexityRoot.EventList.Events == nil {
@@ -226,6 +257,37 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.EventList.TotalCount(childComplexity), true
 
+	case "GetMePayload.createdAt":
+		if e.ComplexityRoot.GetMePayload.CreatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GetMePayload.CreatedAt(childComplexity), true
+	case "GetMePayload.email":
+		if e.ComplexityRoot.GetMePayload.Email == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GetMePayload.Email(childComplexity), true
+	case "GetMePayload.name":
+		if e.ComplexityRoot.GetMePayload.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GetMePayload.Name(childComplexity), true
+	case "GetMePayload.role":
+		if e.ComplexityRoot.GetMePayload.Role == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GetMePayload.Role(childComplexity), true
+	case "GetMePayload.userId":
+		if e.ComplexityRoot.GetMePayload.UserID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GetMePayload.UserID(childComplexity), true
+
 	case "Mutation.createEvent":
 		if e.ComplexityRoot.Mutation.CreateEvent == nil {
 			break
@@ -247,7 +309,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Mutation.DeleteEvent(childComplexity, args["id"].(string)), true
+		return e.ComplexityRoot.Mutation.DeleteEvent(childComplexity, args["id"].(string), args["expectedVersion"].(int64)), true
 	case "Mutation.login":
 		if e.ComplexityRoot.Mutation.Login == nil {
 			break
@@ -270,6 +332,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.Logout(childComplexity, args["refreshToken"].(string)), true
+	case "Mutation.refreshToken":
+		if e.ComplexityRoot.Mutation.RefreshToken == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_refreshToken_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.RefreshToken(childComplexity, args["input"].(model.RefreshTokenInput)), true
 	case "Mutation.register":
 		if e.ComplexityRoot.Mutation.Register == nil {
 			break
@@ -304,6 +377,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.GetEvent(childComplexity, args["id"].(string)), true
+	case "Query.getMe":
+		if e.ComplexityRoot.Query.GetMe == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.GetMe(childComplexity), true
 
 	case "Query.listEvents":
 		if e.ComplexityRoot.Query.ListEvents == nil {
@@ -317,6 +396,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.ListEvents(childComplexity, args["input"].(model.ListEventsInput)), true
 
+	case "RefreshTokenPayload.accessToken":
+		if e.ComplexityRoot.RefreshTokenPayload.AccessToken == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RefreshTokenPayload.AccessToken(childComplexity), true
+	case "RefreshTokenPayload.expiresIn":
+		if e.ComplexityRoot.RefreshTokenPayload.ExpiresIn == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RefreshTokenPayload.ExpiresIn(childComplexity), true
+
 	}
 	return 0, false
 }
@@ -328,6 +420,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCreateEventInput,
 		ec.unmarshalInputListEventsInput,
 		ec.unmarshalInputLoginInput,
+		ec.unmarshalInputRefreshTokenInput,
 		ec.unmarshalInputRegisterInput,
 		ec.unmarshalInputUpdateEventInput,
 	)
@@ -454,12 +547,16 @@ func (ec *executionContext) childFields_Event(ctx context.Context, field graphql
 		return ec.fieldContext_Event_totalSeats(ctx, field)
 	case "availableSeats":
 		return ec.fieldContext_Event_availableSeats(ctx, field)
-	case "price":
-		return ec.fieldContext_Event_price(ctx, field)
+	case "priceMinor":
+		return ec.fieldContext_Event_priceMinor(ctx, field)
 	case "createdAt":
 		return ec.fieldContext_Event_createdAt(ctx, field)
 	case "updatedAt":
 		return ec.fieldContext_Event_updatedAt(ctx, field)
+	case "currency":
+		return ec.fieldContext_Event_currency(ctx, field)
+	case "version":
+		return ec.fieldContext_Event_version(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Event", field.Name)
 }
@@ -476,6 +573,32 @@ func (ec *executionContext) childFields_EventList(ctx context.Context, field gra
 		return ec.fieldContext_EventList_pageSize(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type EventList", field.Name)
+}
+
+func (ec *executionContext) childFields_GetMePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "userId":
+		return ec.fieldContext_GetMePayload_userId(ctx, field)
+	case "email":
+		return ec.fieldContext_GetMePayload_email(ctx, field)
+	case "name":
+		return ec.fieldContext_GetMePayload_name(ctx, field)
+	case "role":
+		return ec.fieldContext_GetMePayload_role(ctx, field)
+	case "createdAt":
+		return ec.fieldContext_GetMePayload_createdAt(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type GetMePayload", field.Name)
+}
+
+func (ec *executionContext) childFields_RefreshTokenPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "accessToken":
+		return ec.fieldContext_RefreshTokenPayload_accessToken(ctx, field)
+	case "expiresIn":
+		return ec.fieldContext_RefreshTokenPayload_expiresIn(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RefreshTokenPayload", field.Name)
 }
 
 func (ec *executionContext) childFields___Directive(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -619,6 +742,14 @@ func (ec *executionContext) field_Mutation_deleteEvent_args(ctx context.Context,
 		return nil, err
 	}
 	args["id"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "expectedVersion",
+		func(ctx context.Context, v any) (int64, error) {
+			return ec.unmarshalNInt642int64(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["expectedVersion"] = arg1
 	return args, nil
 }
 
@@ -647,6 +778,20 @@ func (ec *executionContext) field_Mutation_logout_args(ctx context.Context, rawA
 		return nil, err
 	}
 	args["refreshToken"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_refreshToken_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.RefreshTokenInput, error) {
+			return ec.unmarshalNRefreshTokenInput2eventixᚋgatewayᚋgraphᚋmodelᚐRefreshTokenInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
 	return args, nil
 }
 
@@ -1041,27 +1186,27 @@ func (ec *executionContext) fieldContext_Event_availableSeats(_ context.Context,
 	return graphql.NewScalarFieldContext("Event", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
-func (ec *executionContext) _Event_price(ctx context.Context, field graphql.CollectedField, obj *model.Event) (ret graphql.Marshaler) {
+func (ec *executionContext) _Event_priceMinor(ctx context.Context, field graphql.CollectedField, obj *model.Event) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Event_price(ctx, field)
+			return ec.fieldContext_Event_priceMinor(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Price, nil
+			return obj.PriceMinor, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v float64) graphql.Marshaler {
-			return ec.marshalNFloat2float64(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v int64) graphql.Marshaler {
+			return ec.marshalNInt642int64(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_Event_price(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Event", field, false, false, errors.New("field of type Float does not have child fields"))
+func (ec *executionContext) fieldContext_Event_priceMinor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Event", field, false, false, errors.New("field of type Int64 does not have child fields"))
 }
 
 func (ec *executionContext) _Event_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.Event) (ret graphql.Marshaler) {
@@ -1108,6 +1253,52 @@ func (ec *executionContext) _Event_updatedAt(ctx context.Context, field graphql.
 }
 func (ec *executionContext) fieldContext_Event_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Event", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _Event_currency(ctx context.Context, field graphql.CollectedField, obj *model.Event) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Event_currency(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Currency, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Event_currency(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Event", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Event_version(ctx context.Context, field graphql.CollectedField, obj *model.Event) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Event_version(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Version, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int64) graphql.Marshaler {
+			return ec.marshalNInt642int64(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Event_version(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Event", field, false, false, errors.New("field of type Int64 does not have child fields"))
 }
 
 func (ec *executionContext) _EventList_events(ctx context.Context, field graphql.CollectedField, obj *model.EventList) (ret graphql.Marshaler) {
@@ -1209,6 +1400,121 @@ func (ec *executionContext) _EventList_pageSize(ctx context.Context, field graph
 }
 func (ec *executionContext) fieldContext_EventList_pageSize(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("EventList", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _GetMePayload_userId(ctx context.Context, field graphql.CollectedField, obj *model.GetMePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GetMePayload_userId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UserID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNID2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GetMePayload_userId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GetMePayload", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _GetMePayload_email(ctx context.Context, field graphql.CollectedField, obj *model.GetMePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GetMePayload_email(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Email, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GetMePayload_email(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GetMePayload", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GetMePayload_name(ctx context.Context, field graphql.CollectedField, obj *model.GetMePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GetMePayload_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GetMePayload_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GetMePayload", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GetMePayload_role(ctx context.Context, field graphql.CollectedField, obj *model.GetMePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GetMePayload_role(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Role, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GetMePayload_role(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GetMePayload", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GetMePayload_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.GetMePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GetMePayload_createdAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GetMePayload_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GetMePayload", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _Mutation_register(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
@@ -1343,6 +1649,50 @@ func (ec *executionContext) fieldContext_Mutation_logout(ctx context.Context, fi
 	return fc, nil
 }
 
+func (ec *executionContext) _Mutation_refreshToken(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_refreshToken(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().RefreshToken(ctx, fc.Args["input"].(model.RefreshTokenInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.RefreshTokenPayload) graphql.Marshaler {
+			return ec.marshalNRefreshTokenPayload2ᚖeventixᚋgatewayᚋgraphᚋmodelᚐRefreshTokenPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_refreshToken(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_RefreshTokenPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_refreshToken_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Mutation_createEvent(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1441,7 +1791,7 @@ func (ec *executionContext) _Mutation_deleteEvent(ctx context.Context, field gra
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Mutation().DeleteEvent(ctx, fc.Args["id"].(string))
+			return ec.Resolvers.Mutation().DeleteEvent(ctx, fc.Args["id"].(string), fc.Args["expectedVersion"].(int64))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
@@ -1563,6 +1913,38 @@ func (ec *executionContext) fieldContext_Query_listEvents(ctx context.Context, f
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_getMe(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_getMe(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().GetMe(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.GetMePayload) graphql.Marshaler {
+			return ec.marshalNGetMePayload2ᚖeventixᚋgatewayᚋgraphᚋmodelᚐGetMePayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_getMe(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GetMePayload(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query___type(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1637,6 +2019,52 @@ func (ec *executionContext) fieldContext_Query___schema(_ context.Context, field
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _RefreshTokenPayload_accessToken(ctx context.Context, field graphql.CollectedField, obj *model.RefreshTokenPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RefreshTokenPayload_accessToken(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AccessToken, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RefreshTokenPayload_accessToken(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RefreshTokenPayload", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _RefreshTokenPayload_expiresIn(ctx context.Context, field graphql.CollectedField, obj *model.RefreshTokenPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RefreshTokenPayload_expiresIn(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ExpiresIn, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
+			return ec.marshalNInt2int32(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RefreshTokenPayload_expiresIn(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RefreshTokenPayload", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) ___Directive_name(ctx context.Context, field graphql.CollectedField, obj *introspection.Directive) (ret graphql.Marshaler) {
@@ -2709,7 +3137,7 @@ func (ec *executionContext) unmarshalInputCreateEventInput(ctx context.Context, 
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"title", "description", "venue", "eventDate", "totalSeats", "price"}
+	fieldsInOrder := [...]string{"title", "description", "venue", "eventDate", "totalSeats", "priceMinor", "currency"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -2751,13 +3179,20 @@ func (ec *executionContext) unmarshalInputCreateEventInput(ctx context.Context, 
 				return it, err
 			}
 			it.TotalSeats = data
-		case "price":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("price"))
-			data, err := ec.unmarshalNFloat2float64(ctx, v)
+		case "priceMinor":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("priceMinor"))
+			data, err := ec.unmarshalNInt642int64(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.Price = data
+			it.PriceMinor = data
+		case "currency":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("currency"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Currency = data
 		}
 	}
 	return it, nil
@@ -2844,6 +3279,36 @@ func (ec *executionContext) unmarshalInputLoginInput(ctx context.Context, obj an
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputRefreshTokenInput(ctx context.Context, obj any) (model.RefreshTokenInput, error) {
+	var it model.RefreshTokenInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"refreshToken"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "refreshToken":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("refreshToken"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RefreshToken = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputRegisterInput(ctx context.Context, obj any) (model.RegisterInput, error) {
 	var it model.RegisterInput
 	if obj == nil {
@@ -2899,7 +3364,7 @@ func (ec *executionContext) unmarshalInputUpdateEventInput(ctx context.Context, 
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"title", "description", "venue", "eventDate", "totalSeats", "price", "updateMask"}
+	fieldsInOrder := [...]string{"title", "description", "venue", "eventDate", "totalSeats", "priceMinor", "updateMask", "currency", "expectedVersion"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -2941,13 +3406,13 @@ func (ec *executionContext) unmarshalInputUpdateEventInput(ctx context.Context, 
 				return it, err
 			}
 			it.TotalSeats = data
-		case "price":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("price"))
-			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+		case "priceMinor":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("priceMinor"))
+			data, err := ec.unmarshalOInt642ᚖint64(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.Price = data
+			it.PriceMinor = data
 		case "updateMask":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("updateMask"))
 			data, err := ec.unmarshalOEventField2ᚕeventixᚋgatewayᚋgraphᚋmodelᚐEventFieldᚄ(ctx, v)
@@ -2955,6 +3420,20 @@ func (ec *executionContext) unmarshalInputUpdateEventInput(ctx context.Context, 
 				return it, err
 			}
 			it.UpdateMask = data
+		case "currency":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("currency"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Currency = data
+		case "expectedVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expectedVersion"))
+			data, err := ec.unmarshalNInt642int64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExpectedVersion = data
 		}
 	}
 	return it, nil
@@ -3068,8 +3547,8 @@ func (ec *executionContext) _Event(ctx context.Context, sel ast.SelectionSet, ob
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "price":
-			out.Values[i] = ec._Event_price(ctx, field, obj)
+		case "priceMinor":
+			out.Values[i] = ec._Event_priceMinor(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -3081,6 +3560,16 @@ func (ec *executionContext) _Event(ctx context.Context, sel ast.SelectionSet, ob
 		case "updatedAt":
 			out.Values[i] = ec._Event_updatedAt(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "currency":
+			out.Values[i] = ec._Event_currency(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "version":
+			out.Values[i] = ec._Event_version(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		default:
@@ -3157,6 +3646,64 @@ func (ec *executionContext) _EventList(ctx context.Context, sel ast.SelectionSet
 	return out
 }
 
+var getMePayloadImplementors = []string{"GetMePayload"}
+
+func (ec *executionContext) _GetMePayload(ctx context.Context, sel ast.SelectionSet, obj *model.GetMePayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, getMePayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("GetMePayload")
+		case "userId":
+			out.Values[i] = ec._GetMePayload_userId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "email":
+			out.Values[i] = ec._GetMePayload_email(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._GetMePayload_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "role":
+			out.Values[i] = ec._GetMePayload_role(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "createdAt":
+			out.Values[i] = ec._GetMePayload_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var mutationImplementors = []string{"Mutation"}
 
 func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet) graphql.Marshaler {
@@ -3194,6 +3741,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "logout":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_logout(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "refreshToken":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_refreshToken(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -3304,6 +3858,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "getMe":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_getMe(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "__type":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Query___type(ctx, field)
@@ -3317,6 +3893,49 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			})
 			if out.Values[i] == graphql.RequiredNull {
 				atomic.AddUint32(&out.Invalids, 1)
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var refreshTokenPayloadImplementors = []string{"RefreshTokenPayload"}
+
+func (ec *executionContext) _RefreshTokenPayload(ctx context.Context, sel ast.SelectionSet, obj *model.RefreshTokenPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, refreshTokenPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RefreshTokenPayload")
+		case "accessToken":
+			out.Values[i] = ec._RefreshTokenPayload_accessToken(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "expiresIn":
+			out.Values[i] = ec._RefreshTokenPayload_expiresIn(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
 			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
@@ -3808,20 +4427,14 @@ func (ec *executionContext) marshalNEventList2ᚖeventixᚋgatewayᚋgraphᚋmod
 	return ec._EventList(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNFloat2float64(ctx context.Context, v any) (float64, error) {
-	res, err := graphql.UnmarshalFloatContext(ctx, v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalNFloat2float64(ctx context.Context, sel ast.SelectionSet, v float64) graphql.Marshaler {
-	_ = sel
-	res := graphql.MarshalFloatContext(v)
-	if res == graphql.Null {
+func (ec *executionContext) marshalNGetMePayload2ᚖeventixᚋgatewayᚋgraphᚋmodelᚐGetMePayload(ctx context.Context, sel ast.SelectionSet, v *model.GetMePayload) graphql.Marshaler {
+	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
 		}
+		return graphql.Null
 	}
-	return graphql.WrapContextMarshaler(ctx, res)
+	return ec._GetMePayload(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNID2string(ctx context.Context, v any) (string, error) {
@@ -3856,6 +4469,22 @@ func (ec *executionContext) marshalNInt2int32(ctx context.Context, sel ast.Selec
 	return res
 }
 
+func (ec *executionContext) unmarshalNInt642int64(ctx context.Context, v any) (int64, error) {
+	res, err := graphql.UnmarshalInt64(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNInt642int64(ctx context.Context, sel ast.SelectionSet, v int64) graphql.Marshaler {
+	_ = sel
+	res := graphql.MarshalInt64(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return res
+}
+
 func (ec *executionContext) unmarshalNListEventsInput2eventixᚋgatewayᚋgraphᚋmodelᚐListEventsInput(ctx context.Context, v any) (model.ListEventsInput, error) {
 	res, err := ec.unmarshalInputListEventsInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -3864,6 +4493,21 @@ func (ec *executionContext) unmarshalNListEventsInput2eventixᚋgatewayᚋgraph�
 func (ec *executionContext) unmarshalNLoginInput2eventixᚋgatewayᚋgraphᚋmodelᚐLoginInput(ctx context.Context, v any) (model.LoginInput, error) {
 	res, err := ec.unmarshalInputLoginInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNRefreshTokenInput2eventixᚋgatewayᚋgraphᚋmodelᚐRefreshTokenInput(ctx context.Context, v any) (model.RefreshTokenInput, error) {
+	res, err := ec.unmarshalInputRefreshTokenInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNRefreshTokenPayload2ᚖeventixᚋgatewayᚋgraphᚋmodelᚐRefreshTokenPayload(ctx context.Context, sel ast.SelectionSet, v *model.RefreshTokenPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RefreshTokenPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNRegisterInput2eventixᚋgatewayᚋgraphᚋmodelᚐRegisterInput(ctx context.Context, v any) (model.RegisterInput, error) {
@@ -4114,23 +4758,6 @@ func (ec *executionContext) marshalOEventField2ᚕeventixᚋgatewayᚋgraphᚋmo
 	return ret
 }
 
-func (ec *executionContext) unmarshalOFloat2ᚖfloat64(ctx context.Context, v any) (*float64, error) {
-	if v == nil {
-		return nil, nil
-	}
-	res, err := graphql.UnmarshalFloatContext(ctx, v)
-	return &res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalOFloat2ᚖfloat64(ctx context.Context, sel ast.SelectionSet, v *float64) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	_ = sel
-	res := graphql.MarshalFloatContext(*v)
-	return graphql.WrapContextMarshaler(ctx, res)
-}
-
 func (ec *executionContext) unmarshalOInt2ᚖint32(ctx context.Context, v any) (*int32, error) {
 	if v == nil {
 		return nil, nil
@@ -4146,6 +4773,24 @@ func (ec *executionContext) marshalOInt2ᚖint32(ctx context.Context, sel ast.Se
 	_ = sel
 	_ = ctx
 	res := graphql.MarshalInt32(*v)
+	return res
+}
+
+func (ec *executionContext) unmarshalOInt642ᚖint64(ctx context.Context, v any) (*int64, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalInt64(v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOInt642ᚖint64(ctx context.Context, sel ast.SelectionSet, v *int64) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	_ = sel
+	_ = ctx
+	res := graphql.MarshalInt64(*v)
 	return res
 }
 

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,6 +64,9 @@ func repoRoot(t *testing.T) string {
 func buildBinary(t *testing.T, dir, out string) string {
 	t.Helper()
 
+	if runtime.GOOS == "windows" {
+		out += ".exe"
+	}
 	bin := filepath.Join(t.TempDir(), out)
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	cmd.Dir = dir
@@ -121,9 +125,9 @@ func setupTestEnvironment(t *testing.T) *TestEnvironment {
 		log.Println(" .env file not found, using environment variables")
 	}
 
-	dbNameTest := os.Getenv("DB_NAME_TEST")
-	dbPasswordTest := os.Getenv("DB_PASSWORD_TEST")
-	dbUserTest := os.Getenv("DB_USER_TEST")
+	dbNameTest := envDefault("DB_NAME_TEST", "eventix_test")
+	dbPasswordTest := envDefault("DB_PASSWORD_TEST", "test-password")
+	dbUserTest := envDefault("DB_USER_TEST", "testuser")
 
 	jwtSecretTest := "test-secret"
 	jwtAccessExpTest := "15m"
@@ -190,6 +194,7 @@ func setupTestEnvironment(t *testing.T) *TestEnvironment {
 	waitReady(t, fmt.Sprintf("127.0.0.1:%d", authPort), 30*time.Second)
 
 	catalogEnv := append(append([]string{}, dbEnv...),
+		"JWT_SECRET="+jwtSecretTest,
 		fmt.Sprintf("CATALOG_GRPC_PORT=%d", catalogPort),
 	)
 
@@ -207,6 +212,7 @@ func setupTestEnvironment(t *testing.T) *TestEnvironment {
 	gatewayCmd.Stdout = os.Stdout
 	gatewayCmd.Stderr = os.Stderr
 	gatewayCmd.Env = append(os.Environ(),
+		"JWT_SECRET="+jwtSecretTest,
 		fmt.Sprintf("GATEWAY_PORT=%d", gatewayPort),
 		fmt.Sprintf("AUTH_SERVICE_ADDR=127.0.0.1:%d", authPort), // было: authServicePort, где никто не слушал
 		fmt.Sprintf("CATALOG_SERVICE_ADDR=127.0.0.1:%d", catalogPort),
@@ -294,9 +300,8 @@ type GraphQLResponse struct {
 	} `json:"errors,omitempty"`
 }
 
-func executeGraphQL(t *testing.T, gatewayURL, query string, variables map[string]interface{}) GraphQLResponse {
+func executeGraphQLWithToken(t *testing.T, gatewayURL, query string, variables map[string]interface{}, accessToken string) GraphQLResponse {
 	t.Helper()
-
 	reqBody := GraphQLRequest{
 		Query:     query,
 		Variables: variables,
@@ -305,7 +310,14 @@ func executeGraphQL(t *testing.T, gatewayURL, query string, variables map[string
 	jsonBody, err := json.Marshal(reqBody)
 	require.NoError(t, err)
 
-	resp, err := http.Post(gatewayURL+"/query", "application/json", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, gatewayURL+"/query", bytes.NewReader(jsonBody))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -336,11 +348,11 @@ func registerTest(t *testing.T, gatewayURL, email, password, name string) GraphQ
 			"name":     name,
 		},
 	}
-	resp := executeGraphQL(t, gatewayURL, registerQuery, registerVars)
+	resp := executeGraphQLWithToken(t, gatewayURL, registerQuery, registerVars, "")
 	return resp
 }
 
-func TestE2E_RegisterAndLoginAndLogout_Success(t *testing.T) {
+func TestE2E_RegisterLoginRefreshAndLogout_Success(t *testing.T) {
 	env := setupTestEnvironment(t)
 	defer env.Cleanup(t)
 
@@ -369,7 +381,7 @@ func TestE2E_RegisterAndLoginAndLogout_Success(t *testing.T) {
 		},
 	}
 
-	resp = executeGraphQL(t, env.GatewayURL, loginQuery, loginVars)
+	resp = executeGraphQLWithToken(t, env.GatewayURL, loginQuery, loginVars, "")
 	require.Empty(t, resp.Errors, "login failed: %+v", resp.Errors)
 	require.NotNil(t, resp.Data, "login returned nil data")
 
@@ -383,6 +395,20 @@ func TestE2E_RegisterAndLoginAndLogout_Success(t *testing.T) {
 	require.True(t, ok, "refreshToken missing or not a string: %v", loginData)
 	require.NotEmpty(t, refreshToken)
 
+	refreshQuery := `
+		mutation RefreshToken($input: RefreshTokenInput!) {
+			refreshToken(input: $input) { accessToken expiresIn }
+		}
+	`
+	refreshVars := map[string]interface{}{
+		"input": map[string]interface{}{"refreshToken": refreshToken},
+	}
+	resp = executeGraphQLWithToken(t, env.GatewayURL, refreshQuery, refreshVars, "")
+	require.Empty(t, resp.Errors)
+	payload := resp.Data.(map[string]interface{})["refreshToken"].(map[string]interface{})
+	assert.NotEmpty(t, payload["accessToken"])
+	assert.Equal(t, float64(900), payload["expiresIn"])
+
 	logoutQuery := `
 		mutation Logout($refreshToken: String!) {
 			logout(refreshToken: $refreshToken)
@@ -393,9 +419,13 @@ func TestE2E_RegisterAndLoginAndLogout_Success(t *testing.T) {
 		"refreshToken": refreshToken,
 	}
 
-	resp = executeGraphQL(t, env.GatewayURL, logoutQuery, logoutVars)
+	resp = executeGraphQLWithToken(t, env.GatewayURL, logoutQuery, logoutVars, "")
 	require.Empty(t, resp.Errors, "logout failed: %+v", resp.Errors)
 	require.NotNil(t, resp.Data, "logout returned nil data")
+
+	resp = executeGraphQLWithToken(t, env.GatewayURL, refreshQuery, refreshVars, "")
+	require.Len(t, resp.Errors, 1)
+	assert.Equal(t, "UNAUTHORIZED", resp.Errors[0].Extensions["code"])
 }
 
 func TestE2E_RegisterAndLoginAndLogout_Error(t *testing.T) {
@@ -492,14 +522,14 @@ func TestE2E_RegisterAndLoginAndLogout_Error(t *testing.T) {
 			},
 		}
 
-		resp = executeGraphQL(t, env.GatewayURL, loginQuery, loginVars)
+		resp = executeGraphQLWithToken(t, env.GatewayURL, loginQuery, loginVars, "")
 		require.NotEmpty(t, resp.Errors)
 		require.Nil(t, resp.Data)
 
 		assert.Equal(t, "invalid credentials", resp.Errors[0].Message)
 		err, ok := resp.Errors[0].Extensions["code"].(string)
 		require.True(t, ok, "no 'code' field in Extensions: %v", resp.Errors[0].Extensions)
-		assert.Equal(t, "BAD_REQUEST", err)
+		assert.Equal(t, "UNAUTHORIZED", err)
 	})
 
 	t.Run("LoginError_EmptyEmail", func(t *testing.T) {
@@ -528,14 +558,14 @@ func TestE2E_RegisterAndLoginAndLogout_Error(t *testing.T) {
 			},
 		}
 
-		resp = executeGraphQL(t, env.GatewayURL, loginQuery, loginVars)
+		resp = executeGraphQLWithToken(t, env.GatewayURL, loginQuery, loginVars, "")
 		require.NotEmpty(t, resp.Errors)
 		require.Nil(t, resp.Data)
 
 		assert.Equal(t, "invalid credentials", resp.Errors[0].Message)
 		err, ok := resp.Errors[0].Extensions["code"].(string)
 		require.True(t, ok, "no 'code' field in Extensions: %v", resp.Errors[0].Extensions)
-		assert.Equal(t, "BAD_REQUEST", err)
+		assert.Equal(t, "UNAUTHORIZED", err)
 	})
 
 	t.Run("LogoutError_InvalidRefreshToken", func(t *testing.T) {
@@ -549,7 +579,7 @@ func TestE2E_RegisterAndLoginAndLogout_Error(t *testing.T) {
 			"refreshToken": "refreshToken-123-uytt-1",
 		}
 
-		resp := executeGraphQL(t, env.GatewayURL, logoutQuery, logoutVars)
+		resp := executeGraphQLWithToken(t, env.GatewayURL, logoutQuery, logoutVars, "")
 		require.NotEmpty(t, resp.Errors)
 		require.Nil(t, resp.Data)
 
@@ -560,7 +590,40 @@ func TestE2E_RegisterAndLoginAndLogout_Error(t *testing.T) {
 	})
 }
 
-func createTestEvent(t *testing.T, gatewayURL, title, description, venue, eventDate string, totalSeats int, price float64) GraphQLResponse {
+func catalogAdminAccessToken(t *testing.T, env *TestEnvironment) string {
+	t.Helper()
+
+	email := "catalog-admin@example.com"
+	password := "testpassword123"
+	register := registerTest(t, env.GatewayURL, email, password, "Catalog Admin")
+	require.Empty(t, register.Errors)
+	require.NotNil(t, register.Data)
+
+	result, err := env.DB.Exec(`UPDATE users SET role = $1 WHERE email = $2`, "admin", email)
+	require.NoError(t, err)
+	rows, err := result.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, rows)
+
+	query := `mutation Login($input: LoginInput!) {
+		login(input: $input) { accessToken }
+	}`
+	variables := map[string]interface{}{
+		"input": map[string]interface{}{"email": email, "password": password},
+	}
+	login := executeGraphQLWithToken(t, env.GatewayURL, query, variables, "")
+	require.Empty(t, login.Errors)
+	data, ok := login.Data.(map[string]interface{})
+	require.True(t, ok)
+	payload, ok := data["login"].(map[string]interface{})
+	require.True(t, ok)
+	token, ok := payload["accessToken"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, token)
+	return token
+}
+
+func createTestEvent(t *testing.T, gatewayURL, accessToken, title, description, venue, eventDate string, totalSeats int, price int) GraphQLResponse {
 	t.Helper()
 	createEventQuery := `
 		mutation CreateEvent($input: CreateEventInput!) {
@@ -572,7 +635,9 @@ func createTestEvent(t *testing.T, gatewayURL, title, description, venue, eventD
     			eventDate
     			totalSeats
     			availableSeats
-    			price
+			priceMinor
+			currency
+			version
 			}
 		}
 	`
@@ -583,25 +648,27 @@ func createTestEvent(t *testing.T, gatewayURL, title, description, venue, eventD
 			"venue":       venue,
 			"eventDate":   eventDate,
 			"totalSeats":  totalSeats,
-			"price":       price,
+			"priceMinor":  price,
+			"currency":    "RUB",
 		},
 	}
-	resp := executeGraphQL(t, gatewayURL, createEventQuery, createEventVars)
+	resp := executeGraphQLWithToken(t, gatewayURL, createEventQuery, createEventVars, accessToken)
 	return resp
 }
 
 func TestE2E_CreateAndUpdateAndDeleteEvent_Success(t *testing.T) {
 	env := setupTestEnvironment(t)
 	defer env.Cleanup(t)
+	accessToken := catalogAdminAccessToken(t, env)
 
 	title := "Test Event"
 	description := "Description"
 	venue := "New-York"
-	eventDate := "2026-12-25T20:00:00Z"
+	eventDate := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
 	totalSeats := 500
-	price := 15.99
+	price := 1599
 
-	resp := createTestEvent(t, env.GatewayURL, title, description, venue, eventDate, totalSeats, price)
+	resp := createTestEvent(t, env.GatewayURL, accessToken, title, description, venue, eventDate, totalSeats, price)
 	require.Empty(t, resp.Errors, "createEvent failed: %+v", resp.Errors)
 	require.NotNil(t, resp.Data, "createEvent returned nil data")
 
@@ -626,7 +693,7 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Success(t *testing.T) {
 	require.True(t, ok, "totalSeats missing or not a float64: %v", createEventData)
 	createAvailableSeats, ok := createEventData["availableSeats"].(float64)
 	require.True(t, ok, "availableSeats missing or not a float64: %v", createEventData)
-	createPrice, ok := createEventData["price"].(float64)
+	createPrice, ok := createEventData["priceMinor"].(float64)
 	require.True(t, ok, "price missing or not a float64: %v", createEventData)
 
 	assert.Equal(t, title, createTitle)
@@ -635,7 +702,9 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Success(t *testing.T) {
 	assert.Equal(t, eventDate, createEventDate)
 	assert.Equal(t, totalSeats, int(createTotalSeats))
 	assert.Equal(t, totalSeats, int(createAvailableSeats))
-	assert.Equal(t, price, createPrice)
+	assert.Equal(t, float64(price), createPrice)
+	assert.Equal(t, "RUB", createEventData["currency"])
+	assert.Equal(t, float64(1), createEventData["version"])
 
 	updateEventQuery := `
 		mutation UpdateEvent($id: ID!, $input: UpdateEventInput!) {
@@ -647,7 +716,9 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Success(t *testing.T) {
     			eventDate
     			totalSeats
     			availableSeats
-    			price
+			priceMinor
+			currency
+			version
 			}
 		}
 	`
@@ -655,14 +726,15 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Success(t *testing.T) {
 	updateEventVars := map[string]interface{}{
 		"id": createID,
 		"input": map[string]interface{}{
-			"title":      "New incredible show.....",
-			"totalSeats": 1000,
-			"price":      120,
-			"updateMask": []string{"title", "totalSeats", "price"},
+			"title":           "New incredible show.....",
+			"totalSeats":      1000,
+			"priceMinor":      12000,
+			"expectedVersion": 1,
+			"updateMask":      []string{"title", "totalSeats", "priceMinor"},
 		},
 	}
 
-	resp = executeGraphQL(t, env.GatewayURL, updateEventQuery, updateEventVars)
+	resp = executeGraphQLWithToken(t, env.GatewayURL, updateEventQuery, updateEventVars, accessToken)
 	require.Empty(t, resp.Errors, "updateEvent failed: %+v", resp.Errors)
 	require.NotNil(t, resp.Data, "updateEvent returned nil data")
 
@@ -687,7 +759,7 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Success(t *testing.T) {
 	require.True(t, ok, "totalSeats missing or not a float64: %v", updateEventData)
 	updateAvailableSeats, ok := updateEventData["availableSeats"].(float64)
 	require.True(t, ok, "availableSeats missing or not a float64: %v", updateEventData)
-	updatePrice, ok := updateEventData["price"].(float64)
+	updatePrice, ok := updateEventData["priceMinor"].(float64)
 	require.True(t, ok, "price missing or not a float64: %v", updateEventData)
 
 	assert.Equal(t, "New incredible show.....", updateTitle)
@@ -695,20 +767,27 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Success(t *testing.T) {
 	assert.Equal(t, venue, updateVenue)
 	assert.Equal(t, eventDate, updateEventDate)
 	assert.Equal(t, 1000, int(updateTotalSeats))
-	assert.Equal(t, 500, int(updateAvailableSeats))
-	assert.Equal(t, float64(120), updatePrice)
+	assert.Equal(t, 1000, int(updateAvailableSeats))
+	assert.Equal(t, float64(12000), updatePrice)
+	assert.Equal(t, float64(2), updateEventData["version"])
 
 	deleteEventQuery := `
-		mutation DeleteEvent($id: ID!) {
-			deleteEvent(id: $id)
+		mutation DeleteEvent($id: ID!, $expectedVersion: Int64!) {
+			deleteEvent(id: $id, expectedVersion: $expectedVersion)
 		}
 	`
 
 	deleteEventVars := map[string]interface{}{
-		"id": createID,
+		"id":              createID,
+		"expectedVersion": 1,
 	}
 
-	resp = executeGraphQL(t, env.GatewayURL, deleteEventQuery, deleteEventVars)
+	resp = executeGraphQLWithToken(t, env.GatewayURL, deleteEventQuery, deleteEventVars, accessToken)
+	require.Len(t, resp.Errors, 1)
+	assert.Equal(t, "CONFLICT", resp.Errors[0].Extensions["code"])
+
+	deleteEventVars["expectedVersion"] = 2
+	resp = executeGraphQLWithToken(t, env.GatewayURL, deleteEventQuery, deleteEventVars, accessToken)
 	require.Empty(t, resp.Errors, "deleteEvent failed: %+v", resp.Errors)
 	require.NotNil(t, resp.Data, "deleteEvent returned nil data")
 
@@ -729,7 +808,9 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Success(t *testing.T) {
     			eventDate
     			totalSeats
     			availableSeats
-    			price
+			priceMinor
+			currency
+			version
 			}
 		}
 	`
@@ -738,7 +819,7 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Success(t *testing.T) {
 		"id": createID,
 	}
 
-	resp = executeGraphQL(t, env.GatewayURL, getEventQuery, getEventVars)
+	resp = executeGraphQLWithToken(t, env.GatewayURL, getEventQuery, getEventVars, "")
 	require.NotEmpty(t, resp.Errors, "getEvent must failed")
 	require.Nil(t, resp.Data, "getEvent must returned nil data")
 
@@ -751,16 +832,17 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Success(t *testing.T) {
 func TestE2E_CreateAndUpdateAndDeleteEvent_Error(t *testing.T) {
 	env := setupTestEnvironment(t)
 	defer env.Cleanup(t)
+	accessToken := catalogAdminAccessToken(t, env)
 
 	t.Run("CreateEventError_EmptyTitle", func(t *testing.T) {
 		title := ""
 		description := "Description"
 		venue := "New-York"
-		eventDate := "2026-12-25T20:00:00Z"
+		eventDate := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
 		totalSeats := 500
-		price := 15.99
+		price := 1599
 
-		resp := createTestEvent(t, env.GatewayURL, title, description, venue, eventDate, totalSeats, price)
+		resp := createTestEvent(t, env.GatewayURL, accessToken, title, description, venue, eventDate, totalSeats, price)
 		require.NotEmpty(t, resp.Errors)
 		require.Nil(t, resp.Data)
 
@@ -774,15 +856,15 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Error(t *testing.T) {
 		title := "title1"
 		description := "Description"
 		venue := "New-York"
-		eventDate := "2026-12-25T20:00:00Z"
+		eventDate := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
 		totalSeats := 500
-		price := 15.99
+		price := 1599
 
-		resp := createTestEvent(t, env.GatewayURL, title, description, venue, eventDate, totalSeats, price)
+		resp := createTestEvent(t, env.GatewayURL, accessToken, title, description, venue, eventDate, totalSeats, price)
 		require.Empty(t, resp.Errors)
 		require.NotNil(t, resp.Data)
 
-		resp = createTestEvent(t, env.GatewayURL, title, description, venue, eventDate, totalSeats, price)
+		resp = createTestEvent(t, env.GatewayURL, accessToken, title, description, venue, eventDate, totalSeats, price)
 		require.NotEmpty(t, resp.Errors)
 		require.Nil(t, resp.Data)
 
@@ -796,11 +878,11 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Error(t *testing.T) {
 		title := "New Title"
 		description := "Description"
 		venue := "New-York"
-		eventDate := "2026-12-25T20:00:00Z"
+		eventDate := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
 		totalSeats := 500
-		price := 15.99
+		price := 1599
 
-		resp := createTestEvent(t, env.GatewayURL, title, description, venue, eventDate, totalSeats, price)
+		resp := createTestEvent(t, env.GatewayURL, accessToken, title, description, venue, eventDate, totalSeats, price)
 		require.Empty(t, resp.Errors)
 		require.NotNil(t, resp.Data)
 
@@ -824,7 +906,9 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Error(t *testing.T) {
     			eventDate
     			totalSeats
     			availableSeats
-    			price
+			priceMinor
+			currency
+			version
 			}
 		}
 	`
@@ -832,14 +916,15 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Error(t *testing.T) {
 		updateEventVars := map[string]interface{}{
 			"id": createID,
 			"input": map[string]interface{}{
-				"title":      "New incredible show.....",
-				"totalSeats": 1000,
-				"price":      120,
-				"updateMask": []string{"title", "totalseats", "price"},
+				"title":           "New incredible show.....",
+				"totalSeats":      1000,
+				"priceMinor":      12000,
+				"expectedVersion": 1,
+				"updateMask":      []string{"title", "totalseats", "priceMinor"},
 			},
 		}
 
-		resp = executeGraphQL(t, env.GatewayURL, updateEventQuery, updateEventVars)
+		resp = executeGraphQLWithToken(t, env.GatewayURL, updateEventQuery, updateEventVars, accessToken)
 		require.NotEmpty(t, resp.Errors)
 		require.Nil(t, resp.Data)
 
@@ -857,7 +942,9 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Error(t *testing.T) {
     			eventDate
     			totalSeats
     			availableSeats
-    			price
+			priceMinor
+			currency
+			version
 			}
 		}
 	`
@@ -865,14 +952,15 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Error(t *testing.T) {
 		updateEventVars := map[string]interface{}{
 			"id": "id-1234-uufd-5",
 			"input": map[string]interface{}{
-				"title":      "New incredible show.....",
-				"totalSeats": 1000,
-				"price":      120,
-				"updateMask": []string{"title", "totalSeats", "price"},
+				"title":           "New incredible show.....",
+				"totalSeats":      1000,
+				"priceMinor":      12000,
+				"expectedVersion": 1,
+				"updateMask":      []string{"title", "totalSeats", "priceMinor"},
 			},
 		}
 
-		resp := executeGraphQL(t, env.GatewayURL, updateEventQuery, updateEventVars)
+		resp := executeGraphQLWithToken(t, env.GatewayURL, updateEventQuery, updateEventVars, accessToken)
 		require.NotEmpty(t, resp.Errors)
 		require.Nil(t, resp.Data)
 
@@ -884,16 +972,17 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Error(t *testing.T) {
 
 	t.Run("DeleteEventError_EventNotFound", func(t *testing.T) {
 		deleteEventQuery := `
-		mutation DeleteEvent($id: ID!) {
-			deleteEvent(id: $id)
+		mutation DeleteEvent($id: ID!, $expectedVersion: Int64!) {
+			deleteEvent(id: $id, expectedVersion: $expectedVersion)
 		}
 	`
 
 		deleteEventVars := map[string]interface{}{
-			"id": uuid.New().String(),
+			"id":              uuid.New().String(),
+			"expectedVersion": 1,
 		}
 
-		resp := executeGraphQL(t, env.GatewayURL, deleteEventQuery, deleteEventVars)
+		resp := executeGraphQLWithToken(t, env.GatewayURL, deleteEventQuery, deleteEventVars, accessToken)
 		require.NotEmpty(t, resp.Errors)
 		require.Nil(t, resp.Data)
 
@@ -907,6 +996,7 @@ func TestE2E_CreateAndUpdateAndDeleteEvent_Error(t *testing.T) {
 func TestE2E_GetEventAndListEvents_Success(t *testing.T) {
 	env := setupTestEnvironment(t)
 	defer env.Cleanup(t)
+	accessToken := catalogAdminAccessToken(t, env)
 
 	createdEvents := make(map[string]struct {
 		title       string
@@ -914,7 +1004,7 @@ func TestE2E_GetEventAndListEvents_Success(t *testing.T) {
 		venue       string
 		eventDate   string
 		totalSeats  int
-		price       float64
+		price       int
 	})
 
 	var eventID string
@@ -923,12 +1013,12 @@ func TestE2E_GetEventAndListEvents_Success(t *testing.T) {
 	getEventNumber := 5
 	title := "New Title"
 	description := "Description"
-	eventDate := "2026-12-25T20:00:00Z"
+	eventDate := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
 	baseTotalSeats := 500
-	basePrice := 15.99
+	basePrice := 1599
 
 	for i := 0; i < numberOfEvents; i++ {
-		resp := createTestEvent(t, env.GatewayURL, title+strconv.Itoa(i), description, citys[i], eventDate, baseTotalSeats+i*250, basePrice+float64(i*3))
+		resp := createTestEvent(t, env.GatewayURL, accessToken, title+strconv.Itoa(i), description, citys[i], eventDate, baseTotalSeats+i*250, basePrice+i*300)
 		require.Empty(t, resp.Errors)
 		require.NotNil(t, resp.Data)
 
@@ -947,14 +1037,14 @@ func TestE2E_GetEventAndListEvents_Success(t *testing.T) {
 			venue       string
 			eventDate   string
 			totalSeats  int
-			price       float64
+			price       int
 		}{
 			title:       title + strconv.Itoa(i),
 			description: description,
 			venue:       citys[i],
 			eventDate:   eventDate,
 			totalSeats:  baseTotalSeats + i*250,
-			price:       basePrice + float64(i*3),
+			price:       basePrice + i*300,
 		}
 
 		if i == getEventNumber {
@@ -972,7 +1062,9 @@ func TestE2E_GetEventAndListEvents_Success(t *testing.T) {
     			eventDate
     			totalSeats
     			availableSeats
-    			price
+			priceMinor
+			currency
+			version
 			}
 		}
 	`
@@ -981,7 +1073,7 @@ func TestE2E_GetEventAndListEvents_Success(t *testing.T) {
 		"id": eventID,
 	}
 
-	resp := executeGraphQL(t, env.GatewayURL, getEventQuery, getEventVars)
+	resp := executeGraphQLWithToken(t, env.GatewayURL, getEventQuery, getEventVars, "")
 	require.Empty(t, resp.Errors, "getEvent failed: %v", resp.Errors)
 	require.NotNil(t, resp.Data, "getEvent returned nil data: %v", resp.Data)
 
@@ -1005,7 +1097,7 @@ func TestE2E_GetEventAndListEvents_Success(t *testing.T) {
 	require.True(t, ok, "totalSeats missing or not a float64: %v", getEventData)
 	getAvailableSeats, ok := getEventData["availableSeats"].(float64)
 	require.True(t, ok, "availableSeats missing or not a float64: %v", getEventData)
-	getPrice, ok := getEventData["price"].(float64)
+	getPrice, ok := getEventData["priceMinor"].(float64)
 	require.True(t, ok, "price missing or not a float64: %v", getEventData)
 
 	assert.Equal(t, eventID, getID)
@@ -1015,8 +1107,8 @@ func TestE2E_GetEventAndListEvents_Success(t *testing.T) {
 	assert.Equal(t, eventDate, getEventDate)
 	assert.Equal(t, baseTotalSeats+getEventNumber*250, int(getTotalSeats))
 	assert.Equal(t, baseTotalSeats+getEventNumber*250, int(getAvailableSeats))
-	expectedPrice := basePrice + float64(getEventNumber*3)
-	assert.InDelta(t, expectedPrice, getPrice, 0.01)
+	expectedPrice := basePrice + getEventNumber*300
+	assert.Equal(t, float64(expectedPrice), getPrice)
 
 	listEventsQuery := `
 		query ListEvents($input: ListEventsInput!) {
@@ -1029,7 +1121,9 @@ func TestE2E_GetEventAndListEvents_Success(t *testing.T) {
     				eventDate
     				totalSeats
     				availableSeats
-    				price
+				priceMinor
+				currency
+				version
 				}
     			totalCount
     			page
@@ -1048,7 +1142,7 @@ func TestE2E_GetEventAndListEvents_Success(t *testing.T) {
 		},
 	}
 
-	resp = executeGraphQL(t, env.GatewayURL, listEventsQuery, listEventsVars)
+	resp = executeGraphQLWithToken(t, env.GatewayURL, listEventsQuery, listEventsVars, "")
 	require.Empty(t, resp.Errors, "listEvents failed: %v", resp.Errors)
 	require.NotNil(t, resp.Data, "listEvents returned nil data: %v", resp.Data)
 
@@ -1090,7 +1184,7 @@ func TestE2E_GetEventAndListEvents_Success(t *testing.T) {
 		assert.Equal(t, expected.venue, event["venue"])
 		assert.Equal(t, expected.eventDate, event["eventDate"])
 		assert.Equal(t, float64(expected.totalSeats), event["totalSeats"])
-		assert.InDelta(t, expected.price, event["price"], 0.01)
+		assert.Equal(t, float64(expected.price), event["priceMinor"])
 	}
 }
 
@@ -1109,7 +1203,9 @@ func TestE2E_GetEventAndListEvents_Error(t *testing.T) {
     			eventDate
     			totalSeats
     			availableSeats
-    			price
+			priceMinor
+			currency
+			version
 			}
 		}
 	`
@@ -1118,7 +1214,7 @@ func TestE2E_GetEventAndListEvents_Error(t *testing.T) {
 			"id": uuid.New().String(),
 		}
 
-		resp := executeGraphQL(t, env.GatewayURL, getEventQuery, getEventVars)
+		resp := executeGraphQLWithToken(t, env.GatewayURL, getEventQuery, getEventVars, "")
 		require.NotEmpty(t, resp.Errors, "getEvent must failed: %v", resp.Errors)
 		require.Nil(t, resp.Data, "getEvent must returned nil data: %v", resp.Data)
 
@@ -1140,7 +1236,9 @@ func TestE2E_GetEventAndListEvents_Error(t *testing.T) {
     				eventDate
     				totalSeats
     				availableSeats
-    				price
+				priceMinor
+				currency
+				version
 				}
     			totalCount
     			page
@@ -1159,7 +1257,7 @@ func TestE2E_GetEventAndListEvents_Error(t *testing.T) {
 			},
 		}
 
-		resp := executeGraphQL(t, env.GatewayURL, listEventsQuery, listEventsVars)
+		resp := executeGraphQLWithToken(t, env.GatewayURL, listEventsQuery, listEventsVars, "")
 		require.NotEmpty(t, resp.Errors, "listEvents must failed: %v", resp.Errors)
 		require.Nil(t, resp.Data, "listEvents must returned nil data: %v", resp.Data)
 
@@ -1173,11 +1271,12 @@ func TestE2E_GetEventAndListEvents_Error(t *testing.T) {
 func TestE2E_ListEvents_Pagination(t *testing.T) {
 	env := setupTestEnvironment(t)
 	defer env.Cleanup(t)
+	accessToken := catalogAdminAccessToken(t, env)
 
 	numberOfEvents := 5
 	eventIDs := make([]string, 0, numberOfEvents)
 	for i := 0; i < numberOfEvents; i++ {
-		resp := createTestEvent(t, env.GatewayURL, "Pagination Event "+strconv.Itoa(i), "Description", "City"+strconv.Itoa(i), "2026-12-25T20:00:00Z", 500+i*100, 15.99+float64(i))
+		resp := createTestEvent(t, env.GatewayURL, accessToken, "Pagination Event "+strconv.Itoa(i), "Description", "City"+strconv.Itoa(i), time.Now().UTC().Add(24*time.Hour).Format(time.RFC3339), 500+i*100, 1599+i*100)
 		data, ok := resp.Data.(map[string]interface{})
 		require.True(t, ok)
 		createEventData, ok := data["createEvent"].(map[string]interface{})
@@ -1204,13 +1303,13 @@ func TestE2E_ListEvents_Pagination(t *testing.T) {
 	`
 
 	t.Run("Page1", func(t *testing.T) {
-		resp := executeGraphQL(t, env.GatewayURL, listEventsQuery, map[string]interface{}{
+		resp := executeGraphQLWithToken(t, env.GatewayURL, listEventsQuery, map[string]interface{}{
 			"input": map[string]interface{}{
 				"page":        1,
 				"pageSize":    2,
 				"searchQuery": "",
 			},
-		})
+		}, "")
 		require.Empty(t, resp.Errors)
 		require.NotNil(t, resp.Data)
 
@@ -1225,13 +1324,13 @@ func TestE2E_ListEvents_Pagination(t *testing.T) {
 	})
 
 	t.Run("Page2", func(t *testing.T) {
-		resp := executeGraphQL(t, env.GatewayURL, listEventsQuery, map[string]interface{}{
+		resp := executeGraphQLWithToken(t, env.GatewayURL, listEventsQuery, map[string]interface{}{
 			"input": map[string]interface{}{
 				"page":        2,
 				"pageSize":    2,
 				"searchQuery": "",
 			},
-		})
+		}, "")
 		require.Empty(t, resp.Errors)
 		require.NotNil(t, resp.Data)
 
@@ -1245,13 +1344,13 @@ func TestE2E_ListEvents_Pagination(t *testing.T) {
 	})
 
 	t.Run("Page3_Last", func(t *testing.T) {
-		resp := executeGraphQL(t, env.GatewayURL, listEventsQuery, map[string]interface{}{
+		resp := executeGraphQLWithToken(t, env.GatewayURL, listEventsQuery, map[string]interface{}{
 			"input": map[string]interface{}{
 				"page":        3,
 				"pageSize":    2,
 				"searchQuery": "",
 			},
-		})
+		}, "")
 		require.Empty(t, resp.Errors)
 		require.NotNil(t, resp.Data)
 
@@ -1260,5 +1359,49 @@ func TestE2E_ListEvents_Pagination(t *testing.T) {
 
 		events := listData["events"].([]interface{})
 		assert.Len(t, events, 1)
+	})
+}
+
+func TestE2E_GetMe(t *testing.T) {
+	env := setupTestEnvironment(t)
+	defer env.Cleanup(t)
+
+	query := `query { getMe { userId email name role createdAt } }`
+
+	t.Run("Success", func(t *testing.T) {
+		email := "getme@example.com"
+		name := "GetMe User"
+		register := registerTest(t, env.GatewayURL, email, "testpassword123", name)
+		require.Empty(t, register.Errors)
+		data, ok := register.Data.(map[string]interface{})
+		require.True(t, ok)
+		payload, ok := data["register"].(map[string]interface{})
+		require.True(t, ok)
+		accessToken, ok := payload["accessToken"].(string)
+		require.True(t, ok)
+		require.NotEmpty(t, accessToken)
+
+		resp := executeGraphQLWithToken(t, env.GatewayURL, query, nil, accessToken)
+		require.Empty(t, resp.Errors)
+		data, ok = resp.Data.(map[string]interface{})
+		require.True(t, ok)
+		profile, ok := data["getMe"].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, payload["userId"], profile["userId"])
+		assert.Equal(t, email, profile["email"])
+		assert.Equal(t, name, profile["name"])
+		assert.Equal(t, "user", profile["role"])
+		createdAt, ok := profile["createdAt"].(string)
+		require.True(t, ok)
+		_, err := time.Parse(time.RFC3339, createdAt)
+		require.NoError(t, err)
+	})
+
+	t.Run("WithoutAccessToken", func(t *testing.T) {
+		resp := executeGraphQLWithToken(t, env.GatewayURL, query, nil, "")
+		require.Len(t, resp.Errors, 1)
+		assert.Equal(t, "UNAUTHORIZED", resp.Errors[0].Extensions["code"])
+		assert.Equal(t, "authentication required", resp.Errors[0].Message)
+		assert.Nil(t, resp.Data)
 	})
 }

@@ -23,7 +23,8 @@ type CreateEventInput struct {
 	Venue       string    `json:"venue"`
 	EventDate   time.Time `json:"eventDate"`
 	TotalSeats  int32     `json:"totalSeats"`
-	Price       float64   `json:"price"`
+	PriceMinor  int64     `json:"priceMinor"`
+	Currency    string    `json:"currency"`
 }
 
 type Event struct {
@@ -34,9 +35,11 @@ type Event struct {
 	EventDate      time.Time  `json:"eventDate"`
 	TotalSeats     int32      `json:"totalSeats"`
 	AvailableSeats int32      `json:"availableSeats"`
-	Price          float64    `json:"price"`
+	PriceMinor     int64      `json:"priceMinor"`
 	CreatedAt      *time.Time `json:"createdAt,omitempty"`
 	UpdatedAt      *time.Time `json:"updatedAt,omitempty"`
+	Currency       string     `json:"currency"`
+	Version        int64      `json:"version"`
 }
 
 type EventList struct {
@@ -44,6 +47,14 @@ type EventList struct {
 	TotalCount int32    `json:"totalCount"`
 	Page       int32    `json:"page"`
 	PageSize   int32    `json:"pageSize"`
+}
+
+type GetMePayload struct {
+	UserID    string `json:"userId"`
+	Email     string `json:"email"`
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	CreatedAt string `json:"createdAt"`
 }
 
 type ListEventsInput struct {
@@ -63,6 +74,15 @@ type Mutation struct {
 type Query struct {
 }
 
+type RefreshTokenInput struct {
+	RefreshToken string `json:"refreshToken"`
+}
+
+type RefreshTokenPayload struct {
+	AccessToken string `json:"accessToken"`
+	ExpiresIn   int32  `json:"expiresIn"`
+}
+
 type RegisterInput struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -70,13 +90,15 @@ type RegisterInput struct {
 }
 
 type UpdateEventInput struct {
-	Title       *string      `json:"title,omitempty"`
-	Description *string      `json:"description,omitempty"`
-	Venue       *string      `json:"venue,omitempty"`
-	EventDate   *time.Time   `json:"eventDate,omitempty"`
-	TotalSeats  *int32       `json:"totalSeats,omitempty"`
-	Price       *float64     `json:"price,omitempty"`
-	UpdateMask  []EventField `json:"updateMask,omitempty"`
+	Title           *string      `json:"title,omitempty"`
+	Description     *string      `json:"description,omitempty"`
+	Venue           *string      `json:"venue,omitempty"`
+	EventDate       *time.Time   `json:"eventDate,omitempty"`
+	TotalSeats      *int32       `json:"totalSeats,omitempty"`
+	PriceMinor      *int64       `json:"priceMinor,omitempty"`
+	UpdateMask      []EventField `json:"updateMask,omitempty"`
+	Currency        *string      `json:"currency,omitempty"`
+	ExpectedVersion int64        `json:"expectedVersion"`
 }
 
 type EventField string
@@ -87,7 +109,8 @@ const (
 	EventFieldVenue       EventField = "venue"
 	EventFieldEventDate   EventField = "eventDate"
 	EventFieldTotalSeats  EventField = "totalSeats"
-	EventFieldPrice       EventField = "price"
+	EventFieldPriceMinor  EventField = "priceMinor"
+	EventFieldCurrency    EventField = "currency"
 )
 
 var AllEventField = []EventField{
@@ -96,12 +119,13 @@ var AllEventField = []EventField{
 	EventFieldVenue,
 	EventFieldEventDate,
 	EventFieldTotalSeats,
-	EventFieldPrice,
+	EventFieldPriceMinor,
+	EventFieldCurrency,
 }
 
 func (e EventField) IsValid() bool {
 	switch e {
-	case EventFieldTitle, EventFieldDescription, EventFieldVenue, EventFieldEventDate, EventFieldTotalSeats, EventFieldPrice:
+	case EventFieldTitle, EventFieldDescription, EventFieldVenue, EventFieldEventDate, EventFieldTotalSeats, EventFieldPriceMinor, EventFieldCurrency:
 		return true
 	}
 	return false
