@@ -31,9 +31,11 @@ type Event struct {
 	EventDate      string                 `protobuf:"bytes,5,opt,name=event_date,json=eventDate,proto3" json:"event_date,omitempty"`
 	TotalSeats     int32                  `protobuf:"varint,6,opt,name=total_seats,json=totalSeats,proto3" json:"total_seats,omitempty"`
 	AvailableSeats int32                  `protobuf:"varint,7,opt,name=available_seats,json=availableSeats,proto3" json:"available_seats,omitempty"`
-	Price          float64                `protobuf:"fixed64,8,opt,name=price,proto3" json:"price,omitempty"`
+	PriceMinor     int64                  `protobuf:"varint,8,opt,name=price_minor,json=priceMinor,proto3" json:"price_minor,omitempty"`
 	CreatedAt      string                 `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt      string                 `protobuf:"bytes,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Currency       string                 `protobuf:"bytes,11,opt,name=currency,proto3" json:"currency,omitempty"`
+	Version        int64                  `protobuf:"varint,12,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -117,9 +119,9 @@ func (x *Event) GetAvailableSeats() int32 {
 	return 0
 }
 
-func (x *Event) GetPrice() float64 {
+func (x *Event) GetPriceMinor() int64 {
 	if x != nil {
-		return x.Price
+		return x.PriceMinor
 	}
 	return 0
 }
@@ -136,6 +138,20 @@ func (x *Event) GetUpdatedAt() string {
 		return x.UpdatedAt
 	}
 	return ""
+}
+
+func (x *Event) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *Event) GetVersion() int64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
 }
 
 type GetEventRequest struct {
@@ -361,7 +377,8 @@ type CreateEventRequest struct {
 	Venue         string                 `protobuf:"bytes,3,opt,name=venue,proto3" json:"venue,omitempty"`
 	EventDate     string                 `protobuf:"bytes,4,opt,name=event_date,json=eventDate,proto3" json:"event_date,omitempty"`
 	TotalSeats    int32                  `protobuf:"varint,5,opt,name=total_seats,json=totalSeats,proto3" json:"total_seats,omitempty"`
-	Price         float64                `protobuf:"fixed64,6,opt,name=price,proto3" json:"price,omitempty"`
+	PriceMinor    int64                  `protobuf:"varint,6,opt,name=price_minor,json=priceMinor,proto3" json:"price_minor,omitempty"`
+	Currency      string                 `protobuf:"bytes,7,opt,name=currency,proto3" json:"currency,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -431,11 +448,18 @@ func (x *CreateEventRequest) GetTotalSeats() int32 {
 	return 0
 }
 
-func (x *CreateEventRequest) GetPrice() float64 {
+func (x *CreateEventRequest) GetPriceMinor() int64 {
 	if x != nil {
-		return x.Price
+		return x.PriceMinor
 	}
 	return 0
+}
+
+func (x *CreateEventRequest) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
 }
 
 type CreateEventResponse struct {
@@ -483,17 +507,19 @@ func (x *CreateEventResponse) GetEvent() *Event {
 }
 
 type UpdateEventRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	EventId       string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
-	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
-	Venue         string                 `protobuf:"bytes,4,opt,name=venue,proto3" json:"venue,omitempty"`
-	EventDate     string                 `protobuf:"bytes,5,opt,name=event_date,json=eventDate,proto3" json:"event_date,omitempty"`
-	TotalSeats    int32                  `protobuf:"varint,6,opt,name=total_seats,json=totalSeats,proto3" json:"total_seats,omitempty"`
-	Price         float64                `protobuf:"fixed64,7,opt,name=price,proto3" json:"price,omitempty"`
-	UpdateMask    *fieldmaskpb.FieldMask `protobuf:"bytes,8,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	EventId         string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	Title           string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	Description     string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Venue           string                 `protobuf:"bytes,4,opt,name=venue,proto3" json:"venue,omitempty"`
+	EventDate       string                 `protobuf:"bytes,5,opt,name=event_date,json=eventDate,proto3" json:"event_date,omitempty"`
+	TotalSeats      int32                  `protobuf:"varint,6,opt,name=total_seats,json=totalSeats,proto3" json:"total_seats,omitempty"`
+	PriceMinor      int64                  `protobuf:"varint,7,opt,name=price_minor,json=priceMinor,proto3" json:"price_minor,omitempty"`
+	UpdateMask      *fieldmaskpb.FieldMask `protobuf:"bytes,8,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
+	Currency        string                 `protobuf:"bytes,9,opt,name=currency,proto3" json:"currency,omitempty"`
+	ExpectedVersion int64                  `protobuf:"varint,10,opt,name=expected_version,json=expectedVersion,proto3" json:"expected_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *UpdateEventRequest) Reset() {
@@ -568,9 +594,9 @@ func (x *UpdateEventRequest) GetTotalSeats() int32 {
 	return 0
 }
 
-func (x *UpdateEventRequest) GetPrice() float64 {
+func (x *UpdateEventRequest) GetPriceMinor() int64 {
 	if x != nil {
-		return x.Price
+		return x.PriceMinor
 	}
 	return 0
 }
@@ -580,6 +606,20 @@ func (x *UpdateEventRequest) GetUpdateMask() *fieldmaskpb.FieldMask {
 		return x.UpdateMask
 	}
 	return nil
+}
+
+func (x *UpdateEventRequest) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *UpdateEventRequest) GetExpectedVersion() int64 {
+	if x != nil {
+		return x.ExpectedVersion
+	}
+	return 0
 }
 
 type UpdateEventResponse struct {
@@ -627,10 +667,11 @@ func (x *UpdateEventResponse) GetEvent() *Event {
 }
 
 type DeleteEventRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	EventId       string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	EventId         string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	ExpectedVersion int64                  `protobuf:"varint,2,opt,name=expected_version,json=expectedVersion,proto3" json:"expected_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *DeleteEventRequest) Reset() {
@@ -668,6 +709,13 @@ func (x *DeleteEventRequest) GetEventId() string {
 		return x.EventId
 	}
 	return ""
+}
+
+func (x *DeleteEventRequest) GetExpectedVersion() int64 {
+	if x != nil {
+		return x.ExpectedVersion
+	}
+	return 0
 }
 
 type DeleteEventResponse struct {
@@ -718,7 +766,7 @@ var File_catalog_proto protoreflect.FileDescriptor
 
 const file_catalog_proto_rawDesc = "" +
 	"\n" +
-	"\rcatalog.proto\x12\acatalog\x1a google/protobuf/field_mask.proto\"\xa2\x02\n" +
+	"\rcatalog.proto\x12\acatalog\x1a google/protobuf/field_mask.proto\"\xe3\x02\n" +
 	"\x05Event\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -728,13 +776,16 @@ const file_catalog_proto_rawDesc = "" +
 	"event_date\x18\x05 \x01(\tR\teventDate\x12\x1f\n" +
 	"\vtotal_seats\x18\x06 \x01(\x05R\n" +
 	"totalSeats\x12'\n" +
-	"\x0favailable_seats\x18\a \x01(\x05R\x0eavailableSeats\x12\x14\n" +
-	"\x05price\x18\b \x01(\x01R\x05price\x12\x1d\n" +
+	"\x0favailable_seats\x18\a \x01(\x05R\x0eavailableSeats\x12\x1f\n" +
+	"\vprice_minor\x18\b \x01(\x03R\n" +
+	"priceMinor\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\t \x01(\tR\tcreatedAt\x12\x1d\n" +
 	"\n" +
 	"updated_at\x18\n" +
-	" \x01(\tR\tupdatedAt\",\n" +
+	" \x01(\tR\tupdatedAt\x12\x1a\n" +
+	"\bcurrency\x18\v \x01(\tR\bcurrency\x12\x18\n" +
+	"\aversion\x18\f \x01(\x03R\aversion\",\n" +
 	"\x0fGetEventRequest\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\"8\n" +
 	"\x10GetEventResponse\x12$\n" +
@@ -748,7 +799,7 @@ const file_catalog_proto_rawDesc = "" +
 	"\vtotal_count\x18\x02 \x01(\x05R\n" +
 	"totalCount\x12\x12\n" +
 	"\x04page\x18\x03 \x01(\x05R\x04page\x12\x1b\n" +
-	"\tpage_size\x18\x04 \x01(\x05R\bpageSize\"\xb8\x01\n" +
+	"\tpage_size\x18\x04 \x01(\x05R\bpageSize\"\xdf\x01\n" +
 	"\x12CreateEventRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x14\n" +
@@ -756,10 +807,12 @@ const file_catalog_proto_rawDesc = "" +
 	"\n" +
 	"event_date\x18\x04 \x01(\tR\teventDate\x12\x1f\n" +
 	"\vtotal_seats\x18\x05 \x01(\x05R\n" +
-	"totalSeats\x12\x14\n" +
-	"\x05price\x18\x06 \x01(\x01R\x05price\";\n" +
+	"totalSeats\x12\x1f\n" +
+	"\vprice_minor\x18\x06 \x01(\x03R\n" +
+	"priceMinor\x12\x1a\n" +
+	"\bcurrency\x18\a \x01(\tR\bcurrency\";\n" +
 	"\x13CreateEventResponse\x12$\n" +
-	"\x05event\x18\x01 \x01(\v2\x0e.catalog.EventR\x05event\"\x90\x02\n" +
+	"\x05event\x18\x01 \x01(\v2\x0e.catalog.EventR\x05event\"\xe2\x02\n" +
 	"\x12UpdateEventRequest\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -768,14 +821,19 @@ const file_catalog_proto_rawDesc = "" +
 	"\n" +
 	"event_date\x18\x05 \x01(\tR\teventDate\x12\x1f\n" +
 	"\vtotal_seats\x18\x06 \x01(\x05R\n" +
-	"totalSeats\x12\x14\n" +
-	"\x05price\x18\a \x01(\x01R\x05price\x12;\n" +
+	"totalSeats\x12\x1f\n" +
+	"\vprice_minor\x18\a \x01(\x03R\n" +
+	"priceMinor\x12;\n" +
 	"\vupdate_mask\x18\b \x01(\v2\x1a.google.protobuf.FieldMaskR\n" +
-	"updateMask\";\n" +
+	"updateMask\x12\x1a\n" +
+	"\bcurrency\x18\t \x01(\tR\bcurrency\x12)\n" +
+	"\x10expected_version\x18\n" +
+	" \x01(\x03R\x0fexpectedVersion\";\n" +
 	"\x13UpdateEventResponse\x12$\n" +
-	"\x05event\x18\x01 \x01(\v2\x0e.catalog.EventR\x05event\"/\n" +
+	"\x05event\x18\x01 \x01(\v2\x0e.catalog.EventR\x05event\"Z\n" +
 	"\x12DeleteEventRequest\x12\x19\n" +
-	"\bevent_id\x18\x01 \x01(\tR\aeventId\"/\n" +
+	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12)\n" +
+	"\x10expected_version\x18\x02 \x01(\x03R\x0fexpectedVersion\"/\n" +
 	"\x13DeleteEventResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess2\xf6\x02\n" +
 	"\x0eCatalogService\x12?\n" +

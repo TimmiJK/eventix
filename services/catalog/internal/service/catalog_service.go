@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"eventix/proto/catalog/pb"
+	"eventix/services/catalog/internal/catalogctx"
 	"eventix/services/catalog/internal/models"
 	"eventix/services/catalog/internal/repository"
 	"log/slog"
@@ -76,7 +77,9 @@ func (m *CatalogManager) GetEvent(ctx context.Context, req *pb.GetEventRequest) 
 		EventDate:      event.EventDate.Format(time.RFC3339),
 		TotalSeats:     event.TotalSeats,
 		AvailableSeats: event.AvailableSeats,
-		Price:          event.Price,
+		PriceMinor:     event.PriceMinor,
+		Currency:       event.Currency,
+		Version:        event.Version,
 	}
 
 	m.logger.Info("GetEvent successful", "event_id", req.EventId)
@@ -107,7 +110,9 @@ func (m *CatalogManager) ListEvents(ctx context.Context, req *pb.ListEventsReque
 			EventDate:      val.EventDate.Format(time.RFC3339),
 			TotalSeats:     val.TotalSeats,
 			AvailableSeats: val.AvailableSeats,
-			Price:          val.Price,
+			PriceMinor:     val.PriceMinor,
+			Currency:       val.Currency,
+			Version:        val.Version,
 		}
 	}
 
@@ -120,8 +125,25 @@ func (m *CatalogManager) ListEvents(ctx context.Context, req *pb.ListEventsReque
 	}, nil
 }
 
+var adminRoles = map[string]struct{}{
+	"admin":     {},
+	"organizer": {},
+}
+
 func (m *CatalogManager) CreateEvent(ctx context.Context, req *pb.CreateEventRequest) (*pb.CreateEventResponse, error) {
 	m.logger.Info("CreateEvent attempt", "title", req.Title, "description", req.Description)
+
+	userID, ok1 := catalogctx.UserID(ctx)
+	role, ok2 := catalogctx.UserRole(ctx)
+	if !ok1 || !ok2 {
+		m.logger.Warn("Unauthenticated", "user_id", userID.String(), "role", role)
+		return nil, status.Error(codes.Unauthenticated, "authentication required")
+	}
+
+	if _, ok := adminRoles[role]; !ok {
+		m.logger.Warn("Not allow method", "user_id", userID.String(), "role", role)
+		return nil, status.Error(codes.PermissionDenied, "method is not allowed")
+	}
 
 	eventDate, err := time.Parse(time.RFC3339, req.EventDate)
 	if err != nil {
@@ -135,9 +157,9 @@ func (m *CatalogManager) CreateEvent(ctx context.Context, req *pb.CreateEventReq
 	if len(req.Title) > 200 {
 		return nil, status.Error(codes.InvalidArgument, "title is too long")
 	}
-	if req.Price <= 0 {
+	if req.PriceMinor <= 0 {
 		m.logger.Warn("CreateEvent failed: price cannot be negative", "title", req.Title, "description", req.Description)
-		return nil, status.Error(codes.InvalidArgument, "price cannot be negative")
+		return nil, status.Error(codes.InvalidArgument, "price_minor must be positive")
 	}
 	if req.TotalSeats < 0 {
 		m.logger.Warn("CreateEvent failed: totalSeats cannot be negative", "title", req.Title, "description", req.Description)
@@ -148,6 +170,10 @@ func (m *CatalogManager) CreateEvent(ctx context.Context, req *pb.CreateEventReq
 		return nil, status.Error(codes.InvalidArgument, "eventDate cannot be in the past")
 	}
 
+	if req.Currency != "RUB" {
+		return nil, status.Error(codes.InvalidArgument, "currency could be only \"RUB\"")
+	}
+
 	event := &models.Event{
 		Title:          req.Title,
 		Description:    req.Description,
@@ -155,15 +181,17 @@ func (m *CatalogManager) CreateEvent(ctx context.Context, req *pb.CreateEventReq
 		EventDate:      eventDate,
 		TotalSeats:     req.TotalSeats,
 		AvailableSeats: req.TotalSeats,
-		Price:          req.Price,
+		PriceMinor:     req.PriceMinor,
+		Currency:       req.Currency,
 	}
 
-	createdEvent, err := m.repo.CreateEvent(ctx, event)
+	createdEvent, err := m.repo.CreateEvent(ctx, event, userID)
 	if err != nil {
-		if strings.Contains(err.Error(), "duplicate key") {
+		if errors.Is(err, repository.ErrEventTitleTaken) {
 			m.logger.Warn("CreateEvent failed: event already exists", "title", req.Title, "description", req.Description)
-			return nil, status.Error(codes.AlreadyExists, "event already created")
+			return nil, status.Error(codes.AlreadyExists, "event title already exists")
 		}
+
 		m.logger.Error("CreateEvent failed: database error", "title", req.Title, "description", req.Description, "error", err)
 		return nil, status.Errorf(codes.Internal, "internal server error")
 	}
@@ -176,7 +204,9 @@ func (m *CatalogManager) CreateEvent(ctx context.Context, req *pb.CreateEventReq
 		EventDate:      createdEvent.EventDate.Format(time.RFC3339),
 		TotalSeats:     createdEvent.TotalSeats,
 		AvailableSeats: createdEvent.AvailableSeats,
-		Price:          createdEvent.Price,
+		PriceMinor:     createdEvent.PriceMinor,
+		Currency:       createdEvent.Currency,
+		Version:        createdEvent.Version,
 	}
 
 	m.logger.Info("CreateEvent successful", "event_id", createdEvent.ID.String())
@@ -186,115 +216,99 @@ func (m *CatalogManager) CreateEvent(ctx context.Context, req *pb.CreateEventReq
 func (m *CatalogManager) UpdateEvent(ctx context.Context, req *pb.UpdateEventRequest) (*pb.UpdateEventResponse, error) {
 	m.logger.Info("UpdateEvent attempt", "event_id", req.EventId)
 
-	uuidID, err := uuid.Parse(req.EventId)
+	userID, ok1 := catalogctx.UserID(ctx)
+	role, ok2 := catalogctx.UserRole(ctx)
+	if !ok1 || !ok2 {
+		m.logger.Warn("Unauthenticated", "user_id", userID.String(), "role", role)
+		return nil, status.Error(codes.Unauthenticated, "authentication required")
+	}
+
+	if _, ok := adminRoles[role]; !ok {
+		m.logger.Warn("Not allow method", "user_id", userID.String(), "role", role)
+		return nil, status.Error(codes.PermissionDenied, "method is not allowed")
+	}
+
+	eventUUID, err := uuid.Parse(req.EventId)
 	if err != nil {
 		m.logger.Warn("UpdateEvent failed: invalid event ID format", "event_id", req.EventId, "error", err)
 		return nil, status.Error(codes.InvalidArgument, "invalid event id format")
 	}
 
-	existingEvent, err := m.repo.GetEventByID(ctx, uuidID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			m.logger.Warn("UpdateEvent failed: event not found", "event_id", req.EventId)
-			return nil, status.Error(codes.NotFound, "event not found")
-		}
-		m.logger.Error("UpdateEvent failed: database error", "event_id", req.EventId, "error", err)
-		return nil, status.Error(codes.Internal, "internal server error")
+	if req.ExpectedVersion <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "expected_version must be positive")
 	}
 
-	if req.UpdateMask != nil {
-		for _, path := range req.UpdateMask.Paths {
-			switch path {
-			case "title":
-				if strings.TrimSpace(req.Title) == "" {
-					return nil, status.Error(codes.InvalidArgument, "title is required")
-				}
-				if len(req.Title) > 200 {
-					return nil, status.Error(codes.InvalidArgument, "title is too long")
-				}
+	paths := req.GetUpdateMask().GetPaths()
+	if len(paths) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "update_mask is required")
+	}
 
-				existingEvent.Title = req.Title
-			case "description":
-				existingEvent.Description = req.Description
-			case "venue":
-				existingEvent.Venue = req.Venue
-			case "event_date":
-				if req.EventDate == "" {
-					return nil, status.Error(codes.InvalidArgument, "event_date is required")
-				}
+	var patch models.EventPatch
 
-				eventDate, err := time.Parse(time.RFC3339, req.EventDate)
-				if err != nil {
-					m.logger.Warn("UpdateEvent failed: invalid event date format", "event_date", req.EventDate, "error", err)
-					return nil, status.Error(codes.InvalidArgument, "invalid event date format")
-				}
-				if eventDate.Before(time.Now().Add(-1 * time.Hour)) {
-					return nil, status.Error(codes.InvalidArgument, "eventDate cannot be in the past")
-				}
-
-				existingEvent.EventDate = eventDate
-			case "total_seats":
-				if req.TotalSeats < 0 {
-					return nil, status.Error(codes.InvalidArgument, "totalSeats cannot be negative")
-				}
-
-				existingEvent.TotalSeats = req.TotalSeats
-			case "price":
-				if req.Price <= 0 {
-					return nil, status.Error(codes.InvalidArgument, "price cannot be negative")
-				}
-
-				existingEvent.Price = req.Price
-			default:
-				m.logger.Warn("UpdateEvent failed: unknown field in mask", "field", path)
-				return nil, status.Errorf(codes.InvalidArgument, "unknown field: %s", path)
+	for _, path := range paths {
+		switch path {
+		case "title":
+			if strings.TrimSpace(req.Title) == "" {
+				return nil, status.Error(codes.InvalidArgument, "title is required")
 			}
-		}
-	} else {
-		if req.EventDate == "" {
-			return nil, status.Error(codes.InvalidArgument, "event_date is required")
-		}
+			if len(req.Title) > 200 {
+				return nil, status.Error(codes.InvalidArgument, "title is too long")
+			}
 
-		eventDate, err := time.Parse(time.RFC3339, req.EventDate)
-		if err != nil {
-			m.logger.Warn("UpdateEvent failed: invalid event date format", "event_date", req.EventDate, "error", err)
-			return nil, status.Error(codes.InvalidArgument, "invalid event date format")
-		}
+			patch.Title = &req.Title
+		case "description":
+			patch.Description = &req.Description
+		case "venue":
+			patch.Venue = &req.Venue
+		case "event_date":
+			eventDate, err := time.Parse(time.RFC3339, req.EventDate)
+			if err != nil {
+				m.logger.Warn("UpdateEvent failed: invalid event date format", "event_date", req.EventDate, "error", err)
+				return nil, status.Error(codes.InvalidArgument, "invalid event date format")
+			}
+			if eventDate.Before(time.Now()) {
+				return nil, status.Error(codes.InvalidArgument, "eventDate cannot be in the past")
+			}
 
-		if strings.TrimSpace(req.Title) == "" {
-			return nil, status.Error(codes.InvalidArgument, "title is required")
-		}
-		if len(req.Title) > 200 {
-			return nil, status.Error(codes.InvalidArgument, "title is too long")
-		}
-		if req.Price <= 0 {
-			m.logger.Warn("UpdateEvent failed: price cannot be negative", "event_id", req.EventId)
-			return nil, status.Error(codes.InvalidArgument, "price cannot be negative")
-		}
-		if req.TotalSeats < 0 {
-			m.logger.Warn("UpdateEvent failed: totalSeats cannot be negative", "event_id", req.EventId)
-			return nil, status.Error(codes.InvalidArgument, "totalSeats cannot be negative")
-		}
-		if eventDate.Before(time.Now().Add(-1 * time.Hour)) {
-			return nil, status.Error(codes.InvalidArgument, "eventDate cannot be in the past")
-		}
+			patch.EventDate = &eventDate
+		case "total_seats":
+			if req.TotalSeats < 0 {
+				return nil, status.Error(codes.InvalidArgument, "totalSeats cannot be negative")
+			}
 
-		existingEvent.Title = req.Title
-		existingEvent.Description = req.Description
-		existingEvent.Venue = req.Venue
-		existingEvent.EventDate = eventDate
-		existingEvent.TotalSeats = req.TotalSeats
-		existingEvent.Price = req.Price
+			patch.TotalSeats = &req.TotalSeats
+		case "price_minor":
+			if req.PriceMinor <= 0 {
+				return nil, status.Error(codes.InvalidArgument, "price_minor must be positive")
+			}
+
+			patch.PriceMinor = &req.PriceMinor
+		case "currency":
+			if req.Currency != "RUB" {
+				return nil, status.Error(codes.InvalidArgument, "currency must be \"RUB\"")
+			}
+			patch.Currency = &req.Currency
+		default:
+			m.logger.Warn("UpdateEvent failed: unknown field in mask", "field", path)
+			return nil, status.Errorf(codes.InvalidArgument, "unknown field: %s", path)
+		}
 	}
 
-	updatedEvent, err := m.repo.UpdateEvent(ctx, &existingEvent)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			m.logger.Warn("UpdateEvent failed: event not found", "event_id", req.EventId)
-			return nil, status.Error(codes.NotFound, "event not found")
-		}
-		m.logger.Error("UpdateEvent failed: database error", "event_id", req.EventId, "error", err)
-		return nil, status.Errorf(codes.Internal, "internal server error")
+	updatedEvent, err := m.repo.UpdateEvent(ctx, eventUUID, &patch, req.ExpectedVersion, userID, role == "admin")
+	switch {
+	case errors.Is(err, repository.ErrEventTitleTaken):
+		return nil, status.Error(codes.AlreadyExists, "event title already exists")
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, status.Error(codes.NotFound, "event not found")
+	case errors.Is(err, repository.ErrEventVersionConflict):
+		return nil, status.Error(codes.Aborted, "event was changed, reload and retry")
+	case errors.Is(err, repository.ErrEventNotEditable):
+		return nil, status.Error(codes.FailedPrecondition, "event is not editable")
+	case errors.Is(err, repository.ErrCapacityBelowOccupied):
+		return nil, status.Error(codes.FailedPrecondition, "capacity cannot be below occupied seats")
+	case err != nil:
+		m.logger.ErrorContext(ctx, "UpdateEvent failed", "event_id", req.EventId, "error", err)
+		return nil, status.Error(codes.Internal, "internal server error")
 	}
 
 	pbEvent := &pb.Event{
@@ -305,7 +319,9 @@ func (m *CatalogManager) UpdateEvent(ctx context.Context, req *pb.UpdateEventReq
 		EventDate:      updatedEvent.EventDate.Format(time.RFC3339),
 		TotalSeats:     updatedEvent.TotalSeats,
 		AvailableSeats: updatedEvent.AvailableSeats,
-		Price:          updatedEvent.Price,
+		PriceMinor:     updatedEvent.PriceMinor,
+		Currency:       updatedEvent.Currency,
+		Version:        updatedEvent.Version,
 	}
 
 	m.logger.Info("UpdateEvent successful", "event_id", req.EventId)
@@ -315,21 +331,39 @@ func (m *CatalogManager) UpdateEvent(ctx context.Context, req *pb.UpdateEventReq
 func (m *CatalogManager) DeleteEvent(ctx context.Context, req *pb.DeleteEventRequest) (*pb.DeleteEventResponse, error) {
 	m.logger.Info("DeleteEvent attempt", "event_id", req.EventId)
 
+	userID, ok1 := catalogctx.UserID(ctx)
+	role, ok2 := catalogctx.UserRole(ctx)
+	if !ok1 || !ok2 {
+		m.logger.Warn("Unauthenticated", "user_id", userID.String(), "role", role)
+		return nil, status.Error(codes.Unauthenticated, "authentication required")
+	}
+
+	if _, ok := adminRoles[role]; !ok {
+		m.logger.Warn("Not allow method", "user_id", userID.String(), "role", role)
+		return nil, status.Error(codes.PermissionDenied, "method is not allowed")
+	}
+
 	id, err := uuid.Parse(req.EventId)
 	if err != nil {
 		m.logger.Warn("DeleteEvent failed: invalid event ID format", "event_id", req.EventId, "error", err)
 		return nil, status.Error(codes.InvalidArgument, "invalid event id format")
 	}
 
-	err = m.repo.DeleteEvent(ctx, id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			m.logger.Warn("DeleteEvent failed: event not found", "event_id", req.EventId)
-			return nil, status.Error(codes.NotFound, "event not found")
-		}
+	if req.ExpectedVersion <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "expected_version must be positive")
+	}
 
-		m.logger.Error("DeleteEvent failed: database error", "event_id", req.EventId, "error", err)
-		return nil, status.Errorf(codes.Internal, "internal server error")
+	err = m.repo.DeleteEvent(ctx, id, req.ExpectedVersion, userID, role == "admin")
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, status.Error(codes.NotFound, "event not found")
+	case errors.Is(err, repository.ErrEventNotDeletable):
+		return nil, status.Error(codes.FailedPrecondition, "event can't be deleted")
+	case errors.Is(err, repository.ErrEventVersionConflict):
+		return nil, status.Error(codes.Aborted, "event was changed, reload and retry")
+	case err != nil:
+		m.logger.ErrorContext(ctx, "DeleteEvent failed", "event_id", req.EventId, "error", err)
+		return nil, status.Error(codes.Internal, "internal server error")
 	}
 
 	m.logger.Info("DeleteEvent successful", "event_id", req.EventId)
