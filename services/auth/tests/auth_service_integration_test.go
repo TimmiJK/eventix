@@ -3,252 +3,26 @@ package tests
 import (
 	"context"
 	"database/sql"
+	"eventix/pkg/helpers"
 	jwtTokens "eventix/pkg/jwt"
-	posgresPkg "eventix/pkg/postgres"
 	"eventix/proto/auth/pb"
+	"eventix/services/auth/internal/authctx"
 	"eventix/services/auth/internal/repository"
 	auth "eventix/services/auth/internal/service"
-	"fmt"
-	"log"
 	"log/slog"
-	"net"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"sort"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/joho/godotenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-type TestEnvironment struct {
-	PostgresContainer *postgres.PostgresContainer
-	AuthServiceCmd    *exec.Cmd
-	DB                *sql.DB
-	DSN               string
-}
-
-func repoRoot(t *testing.T) string {
-	t.Helper()
-
-	dir, err := os.Getwd()
-	require.NoError(t, err)
-
-	for i := 0; i < 10; i++ {
-		if _, err := os.Stat(filepath.Join(dir, ".gitignore")); err == nil {
-			return dir
-		}
-
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-
-	t.Fatal("repo root not found (.gitignore marker)")
-	return ""
-}
-
-func buildBinary(t *testing.T, dir, out string) string {
-	t.Helper()
-
-	bin := filepath.Join(t.TempDir(), out)
-	cmd := exec.Command("go", "build", "-o", bin, ".")
-	cmd.Dir = dir
-	outBytes, err := cmd.CombinedOutput()
-	require.NoError(t, err, "build failed: %s", string(outBytes))
-
-	return bin
-}
-
-func freePort(t *testing.T) int {
-	t.Helper()
-
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer l.Close()
-
-	return l.Addr().(*net.TCPAddr).Port
-}
-
-func waitReady(t *testing.T, addr string, timeout time.Duration) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			return
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	t.Fatalf("service on %s did not become ready in %s", addr, timeout)
-}
-
-func killCmd(cmd *exec.Cmd) {
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-	_ = cmd.Process.Kill()
-	_, _ = cmd.Process.Wait()
-}
-
-func envDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
-func setupTestEnvironment(t *testing.T) *TestEnvironment {
-	t.Helper()
-
-	rootDir := repoRoot(t)
-
-	if err := godotenv.Load(filepath.Join(rootDir, ".env")); err != nil {
-		log.Println(" .env file not found, using environment variables")
-	}
-
-	dbNameTest := os.Getenv("DB_NAME_TEST")
-	dbPasswordTest := os.Getenv("DB_PASSWORD_TEST")
-	dbUserTest := os.Getenv("DB_USER_TEST")
-
-	jwtSecretTest := "test-secret"
-	jwtAccessExpTest := "15m"
-	jwtRefreshExpTest := "60m"
-
-	authPort := freePort(t)
-
-	ctx := context.Background()
-
-	postgresContainer, err := postgres.Run(ctx,
-		"postgres:15-alpine",
-		postgres.WithDatabase(dbNameTest),
-		postgres.WithUsername(dbUserTest),
-		postgres.WithPassword(dbPasswordTest),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(30*time.Second),
-		),
-	)
-	require.NoError(t, err, "failed to start postgres container")
-
-	host, err := postgresContainer.Host(ctx)
-	require.NoError(t, err)
-
-	mappedPort, err := postgresContainer.MappedPort(ctx, "5432")
-	require.NoError(t, err)
-
-	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, mappedPort.Num(), dbUserTest, dbPasswordTest, dbNameTest)
-
-	db, err := posgresPkg.NewPostgresDB(dsn)
-	require.NoError(t, err, "failed to connect to test database")
-
-	applyMigrations(t, db)
-
-	authBin := buildBinary(t, filepath.Join(rootDir, "services", "auth", "cmd"), "auth-service")
-
-	dbEnv := []string{
-		"DB_HOST=" + host,
-		fmt.Sprintf("DB_PORT=%d", mappedPort.Num()),
-		"DB_USER=" + dbUserTest,
-		"DB_PASSWORD=" + dbPasswordTest,
-		"DB_NAME=" + dbNameTest,
-	}
-
-	authEnv := append(append([]string{}, dbEnv...),
-		"JWT_SECRET="+jwtSecretTest,
-		fmt.Sprintf("AUTH_GRPC_PORT=%d", authPort),
-		"JWT_ACCESS_TOKEN_EXPIRATION="+jwtAccessExpTest,
-		"JWT_REFRESH_TOKEN_EXPIRATION="+jwtRefreshExpTest,
-	)
-
-	authCmd := exec.Command(authBin)
-	authCmd.Dir = rootDir
-	authCmd.Stdout = os.Stdout
-	authCmd.Stderr = os.Stderr
-	authCmd.Env = append(os.Environ(), authEnv...)
-
-	require.NoError(t, authCmd.Start(), "failed to start auth service")
-	waitReady(t, fmt.Sprintf("127.0.0.1:%d", authPort), 30*time.Second)
-
-	return &TestEnvironment{
-		PostgresContainer: postgresContainer,
-		AuthServiceCmd:    authCmd,
-		DB:                db,
-		DSN:               dsn,
-	}
-}
-
-func (te *TestEnvironment) Cleanup(t *testing.T) {
-	killCmd(te.AuthServiceCmd)
-
-	if te.DB != nil {
-		_ = te.DB.Close()
-	}
-
-	if te.PostgresContainer != nil {
-		if err := te.PostgresContainer.Terminate(context.Background()); err != nil {
-			t.Logf("warning: failed to terminate postgres container: %v", err)
-		}
-	}
-}
-
-func applyMigrations(t *testing.T, db *sql.DB) {
-	t.Helper()
-
-	migrationsDir := filepath.Join(repoRoot(t), "migrations")
-
-	tables := []string{"users", "refresh_tokens"}
-	for _, table := range tables {
-		_, err := db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", table))
-		if err != nil {
-			t.Logf("Warning: failed to drop %s: %v", table, err)
-		}
-	}
-
-	entries, err := os.ReadDir(migrationsDir)
-	if err != nil {
-		t.Fatalf("read migrations dir: %v", err)
-	}
-	var names []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".up.sql") {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		t.Fatal("no .up.sql migrations found")
-	}
-
-	for _, n := range names {
-		body, err := os.ReadFile(filepath.Join(migrationsDir, n))
-		if err != nil {
-			t.Fatalf("read %s: %v", n, err)
-		}
-		if _, err := db.Exec(string(body)); err != nil {
-			t.Fatalf("apply migration %s: %v", n, err)
-		}
-	}
-}
-
 func TestGRPCServiceAuth(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -285,7 +59,7 @@ func TestGRPCServiceAuth(t *testing.T) {
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Equal(t, codes.Unauthenticated, st.Code())
 		assert.Equal(t, "invalid credentials", st.Message())
 	})
 
@@ -331,7 +105,7 @@ func TestGRPCServiceAuth(t *testing.T) {
 }
 
 func TestAuthCreateUser_Error(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -370,8 +144,9 @@ func TestAuthCreateUser_Error(t *testing.T) {
 		assert.Equal(t, "unable to create account", st.Message())
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	t.Run("RegisterDbError", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
 		req := &pb.RegisterRequest{
 			Email:    "testemail@test.com",
 			Password: "passwordvalue125677",
@@ -379,7 +154,6 @@ func TestAuthCreateUser_Error(t *testing.T) {
 		}
 
 		resp, err := authManager.Register(ctx, req)
-		cancel()
 		assert.Nil(t, resp)
 		require.Error(t, err)
 
@@ -391,7 +165,7 @@ func TestAuthCreateUser_Error(t *testing.T) {
 }
 
 func TestAuthSaveRefreshToken_Error(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -444,6 +218,7 @@ func TestAuthSaveRefreshToken_Error(t *testing.T) {
 		require.NoError(t, err)
 
 		userID, err := uuid.Parse(resp.UserId)
+		require.NoError(t, err)
 		cancel()
 
 		err = repo.SaveRefreshToken(ctx, userID, "token-ctx-test", 24*time.Hour)
@@ -453,8 +228,8 @@ func TestAuthSaveRefreshToken_Error(t *testing.T) {
 	})
 }
 
-func TestAuthGetUserByEmail_InvalidEmail(t *testing.T) {
-	env := setupTestEnvironment(t)
+func TestAuthLogin_UnknownEmail(t *testing.T) {
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -487,11 +262,11 @@ func TestAuthGetUserByEmail_InvalidEmail(t *testing.T) {
 
 	st, ok := status.FromError(err)
 	require.True(t, ok)
-	assert.Equal(t, codes.InvalidArgument, st.Code())
-	assert.Contains(t, st.Message(), "invalid credentials")
+	assert.Equal(t, codes.Unauthenticated, st.Code())
+	assert.Equal(t, "invalid credentials", st.Message())
 }
 func TestAuthGetUserByEmail_Success(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -512,7 +287,7 @@ func TestAuthGetUserByEmail_Success(t *testing.T) {
 }
 
 func TestAuthGetUserByID_Success(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -528,7 +303,7 @@ func TestAuthGetUserByID_Success(t *testing.T) {
 }
 
 func TestAuthGetUserByID_NotFound(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -549,7 +324,7 @@ func TestAuthGetUserByID_NotFound(t *testing.T) {
 }
 
 func TestAuthRefreshToken(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -612,7 +387,7 @@ func TestAuthRefreshToken(t *testing.T) {
 }
 
 func TestAuthIsRefreshTokenValid_Flows(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -647,7 +422,7 @@ func TestAuthIsRefreshTokenValid_Flows(t *testing.T) {
 }
 
 func TestAuthRefreshToken_FullFlow(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -678,7 +453,7 @@ func TestAuthRefreshToken_FullFlow(t *testing.T) {
 }
 
 func TestAuthValidateToken_FullFlow(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -739,7 +514,7 @@ func TestAuthValidateToken_FullFlow(t *testing.T) {
 }
 
 func TestAuthValidateToken_WrongSecret(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -751,9 +526,10 @@ func TestAuthValidateToken_WrongSecret(t *testing.T) {
 	require.NoError(t, err)
 
 	claims := &jwtTokens.AccessClaims{
-		UserID: uuid.New().String(),
-		Email:  "wrongsecret@test.com",
-		Role:   "user",
+		TokenUse: "access",
+		UserID:   uuid.New().String(),
+		Email:    "wrongsecret@test.com",
+		Role:     "user",
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
 			Issuer:    "eventix",
@@ -773,7 +549,7 @@ func TestAuthValidateToken_WrongSecret(t *testing.T) {
 }
 
 func TestAuthValidateToken_RefreshTokenNotInDB(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -786,8 +562,9 @@ func TestAuthValidateToken_RefreshTokenNotInDB(t *testing.T) {
 
 	tokenID := "ghost-token-123"
 	claims := &jwtTokens.RefreshClaims{
-		UserID:  userID.String(),
-		TokenID: tokenID,
+		TokenUse: "refresh",
+		UserID:   userID.String(),
+		TokenID:  tokenID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			Issuer:    "eventix",
@@ -808,7 +585,7 @@ func TestAuthValidateToken_RefreshTokenNotInDB(t *testing.T) {
 }
 
 func TestAuthGetMe_Success(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -830,11 +607,10 @@ func TestAuthGetMe_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, registerResp)
 
-	getMeReq := &pb.GetMeRequest{
-		UserId: registerResp.UserId,
-	}
-
-	getMeResp, err := authManager.GetMe(ctxReq, getMeReq)
+	userID, err := uuid.Parse(registerResp.UserId)
+	require.NoError(t, err)
+	ctxReq = authctx.WithUserID(ctxReq, userID)
+	getMeResp, err := authManager.GetMe(ctxReq, &pb.GetMeRequest{})
 	require.NoError(t, err)
 	require.NotNil(t, getMeResp)
 
@@ -849,7 +625,7 @@ func TestAuthGetMe_Success(t *testing.T) {
 }
 
 func TestAuthGetMe_Errors(t *testing.T) {
-	env := setupTestEnvironment(t)
+	env := helpers.SetupTestEnvironment(t, "auth")
 	defer env.Cleanup(t)
 
 	repo := repository.NewPostgresStorage(env.DB)
@@ -858,11 +634,8 @@ func TestAuthGetMe_Errors(t *testing.T) {
 
 	ctxReq := context.Background()
 
-	req := &pb.GetMeRequest{
-		UserId: uuid.NewString(),
-	}
-
-	resp, err := authManager.GetMe(ctxReq, req)
+	ctxReq = authctx.WithUserID(ctxReq, uuid.New())
+	resp, err := authManager.GetMe(ctxReq, &pb.GetMeRequest{})
 	require.Error(t, err)
 	require.Nil(t, resp)
 

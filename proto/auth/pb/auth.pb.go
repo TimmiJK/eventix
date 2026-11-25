@@ -567,7 +567,6 @@ func (x *ValidateTokenResponse) GetRole() string {
 
 type GetMeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -600,13 +599,6 @@ func (x *GetMeRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GetMeRequest.ProtoReflect.Descriptor instead.
 func (*GetMeRequest) Descriptor() ([]byte, []int) {
 	return file_auth_proto_rawDescGZIP(), []int{10}
-}
-
-func (x *GetMeRequest) GetUserId() string {
-	if x != nil {
-		return x.UserId
-	}
-	return ""
 }
 
 type GetMeResponse struct {
@@ -726,9 +718,8 @@ const file_auth_proto_rawDesc = "" +
 	"\bis_valid\x18\x01 \x01(\bR\aisValid\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x14\n" +
 	"\x05email\x18\x03 \x01(\tR\x05email\x12\x12\n" +
-	"\x04role\x18\x04 \x01(\tR\x04role\"'\n" +
-	"\fGetMeRequest\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\tR\x06userId\"\x85\x01\n" +
+	"\x04role\x18\x04 \x01(\tR\x04role\"\x0e\n" +
+	"\fGetMeRequest\"\x85\x01\n" +
 	"\rGetMeResponse\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12\x12\n" +

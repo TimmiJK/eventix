@@ -3,14 +3,14 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"eventix/services/auth/internal/models"
 
 	"github.com/google/uuid"
-	//pgx "github.com/jackc/pgx/v5"
+	"github.com/lib/pq"
 )
 
 type Repository interface {
@@ -30,6 +30,11 @@ func NewPostgresStorage(db *sql.DB) *PostgresStorage {
 	return &PostgresStorage{db: db}
 }
 
+var (
+	ErrEmailTaken           = errors.New("email is already taken")
+	ErrRefreshTokenConflict = errors.New("refresh token already exists")
+)
+
 func (ps *PostgresStorage) CreateUser(ctx context.Context, email string, name string, role string, password []byte) (uuid.UUID, error) {
 	var id uuid.UUID
 
@@ -47,8 +52,9 @@ func (ps *PostgresStorage) CreateUser(ctx context.Context, email string, name st
 	).Scan(&id)
 
 	if err != nil {
-		if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
-			return uuid.UUID{}, fmt.Errorf("email already exists: %w", err)
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "users_email_key" {
+			return uuid.Nil, fmt.Errorf("%w: %w", ErrEmailTaken, err)
 		}
 		return uuid.UUID{}, fmt.Errorf("db create error: %w", err)
 	}
@@ -102,7 +108,7 @@ func (ps *PostgresStorage) GetUserByID(ctx context.Context, userID uuid.UUID) (m
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return models.User{}, fmt.Errorf("user not found by ID: %w", err)
 		}
 		return models.User{}, err
@@ -125,11 +131,14 @@ func (ps *PostgresStorage) SaveRefreshToken(ctx context.Context, userID uuid.UUI
 	)
 
 	if err != nil {
-		if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
-			return fmt.Errorf("email already exists: %w", err)
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "refresh_tokens_token_hash_key" {
+			return fmt.Errorf("save refresh token: %w: %w", ErrRefreshTokenConflict, err)
 		}
+
 		return fmt.Errorf("db create error: %w", err)
 	}
+
 	return nil
 }
 

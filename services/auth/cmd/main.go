@@ -5,6 +5,7 @@ import (
 	"eventix/pkg/helpers"
 	"eventix/pkg/postgres"
 	"eventix/proto/auth/pb"
+	intercaptor "eventix/services/auth/internal/interceptor"
 	storage "eventix/services/auth/internal/repository"
 	service "eventix/services/auth/internal/service"
 	"fmt"
@@ -105,7 +106,11 @@ func main() {
 	repo := storage.NewPostgresStorage(db)
 	authManager := service.NewAuthManager(repo, logger, jwtSecret, accessExp, refreshExp)
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			intercaptor.AuthInterceptor(jwtSecret),
+		),
+	)
 	pb.RegisterAuthServiceServer(grpcServer, authManager)
 
 	healthServer := health.NewServer()

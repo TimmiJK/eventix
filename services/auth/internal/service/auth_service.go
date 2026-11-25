@@ -1,21 +1,21 @@
 package auth
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
-	"strings"
 	"time"
 
 	jwtTokens "eventix/pkg/jwt"
 	pb "eventix/proto/auth/pb"
 
+	"eventix/services/auth/internal/authctx"
 	"eventix/services/auth/internal/repository"
 
 	"github.com/google/uuid"
@@ -85,6 +85,9 @@ func (m *AuthManager) createToken(ctx context.Context, userID uuid.UUID, email s
 
 	err = m.repo.SaveRefreshToken(ctx, userID, tokenID, m.refreshTokenExperation)
 	if err != nil {
+		if errors.Is(err, repository.ErrRefreshTokenConflict) {
+			return nil, fmt.Errorf("refresh token conflict: %w", err)
+		}
 		return nil, fmt.Errorf("failed to save refresh token: %w", err)
 	}
 
@@ -107,10 +110,16 @@ func hashPass(password string, params Argon2Params) ([]byte, error) {
 }
 
 func verifyPass(correctPassword []byte, passwordToVerify string, params Argon2Params) bool {
-	salt := correctPassword[0:params.SaltLength]
+	saltLen := int(params.SaltLength)
+	if len(correctPassword) != saltLen+int(params.KeyLength) {
+		return false
+	}
+
+	salt := correctPassword[:saltLen]
 	hashedPass := argon2.IDKey([]byte(passwordToVerify), salt, params.Iterations, params.Memory, params.Parallelism, params.KeyLength)
-	storedHash := correctPassword[params.SaltLength:]
-	return bytes.Equal(hashedPass, storedHash)
+	storedHash := correctPassword[saltLen:]
+
+	return subtle.ConstantTimeCompare(hashedPass, storedHash) == 1
 }
 
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
@@ -145,7 +154,7 @@ func (m *AuthManager) Register(ctx context.Context, req *pb.RegisterRequest) (*p
 
 	id, err := m.repo.CreateUser(ctx, req.Email, req.Name, "user", pass)
 	if err != nil {
-		if strings.Contains(err.Error(), "duplicate key") {
+		if errors.Is(err, repository.ErrEmailTaken) {
 			m.logger.Warn("Registration failed: email already exists", "email", req.Email)
 			return nil, status.Error(codes.InvalidArgument, "unable to create account")
 		}
@@ -180,17 +189,29 @@ func (m *AuthManager) Login(ctx context.Context, req *pb.LoginRequest) (*pb.Logi
 	}
 
 	usr, err := m.repo.GetUserByEmail(ctx, req.Email)
-	if err != nil {
-		m.logger.Warn("Login failed: user not found", "email", req.Email)
-		return nil, status.Error(codes.InvalidArgument, "invalid credentials")
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		_ = argon2.IDKey(
+			[]byte(req.Password),
+			make([]byte, defaultArgon2Params.SaltLength),
+			defaultArgon2Params.Iterations,
+			defaultArgon2Params.Memory,
+			defaultArgon2Params.Parallelism,
+			defaultArgon2Params.KeyLength,
+		)
+		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
+
+	case err != nil:
+		m.logger.ErrorContext(ctx, "Login: failed to load user", "error", err)
+		return nil, status.Error(codes.Internal, "failed to log in")
 	}
 
 	if !verifyPass(usr.Password, req.Password, defaultArgon2Params) {
 		m.logger.Warn("Login failed: invalid password", "email", req.Email)
-		return nil, status.Error(codes.InvalidArgument, "invalid credentials")
+		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
 	}
 
-	tokens, err := m.createToken(ctx, usr.ID, usr.Email, "user")
+	tokens, err := m.createToken(ctx, usr.ID, usr.Email, usr.Role)
 	if err != nil {
 		m.logger.Error("Login failed: token creation error", "user_id", usr.ID.String(), "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to create tokens")
@@ -237,7 +258,7 @@ func (m *AuthManager) RefreshToken(ctx context.Context, req *pb.RefreshTokenRequ
 	accessToken, err := jwtTokens.CreateAccessToken(
 		user.ID,
 		user.Email,
-		"user",
+		user.Role,
 		m.jwtSecret,
 		m.accessTokenExperation,
 	)
@@ -330,17 +351,13 @@ func (m *AuthManager) ValidateToken(ctx context.Context, req *pb.ValidateTokenRe
 	}, status.Error(codes.Unauthenticated, "invalid token")
 }
 
-func (m *AuthManager) GetMe(ctx context.Context, req *pb.GetMeRequest) (*pb.GetMeResponse, error) {
-	m.logger.Info("GetMe request", "userID", req.UserId)
+func (m *AuthManager) GetMe(ctx context.Context, _ *pb.GetMeRequest) (*pb.GetMeResponse, error) {
+	m.logger.Info("GetMe request")
 
-	if req.UserId == "" {
-		m.logger.Error("getMe request without user_id")
-		return nil, status.Error(codes.InvalidArgument, "user_id is required")
-	}
-	userID, err := uuid.Parse(req.UserId)
-	if err != nil {
-		m.logger.Error("Failed to parse user ID from getMe request", "user_id", userID.String(), "error", err)
-		return &pb.GetMeResponse{}, status.Error(codes.Internal, "invalid user id")
+	userID, ok := authctx.UserID(ctx)
+	if !ok {
+		m.logger.Warn("Unauthenticated", "user_id", userID.String())
+		return nil, status.Error(codes.Unauthenticated, "authentication required")
 	}
 
 	user, err := m.repo.GetUserByID(ctx, userID)

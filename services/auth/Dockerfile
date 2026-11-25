@@ -1,4 +1,4 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 
@@ -7,11 +7,11 @@ WORKDIR /app
 COPY go.work go.work.sum ./
 
 COPY services/auth/go.mod services/auth/go.sum ./services/auth/
-COPY go.mod go.sum ./              
-
-RUN go work sync && go mod download
+COPY go.mod go.sum ./ 
 
 COPY . .
+
+RUN go work sync && go mod download
 
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /auth-service ./services/auth/cmd/main.go
 

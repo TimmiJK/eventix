@@ -7,6 +7,7 @@ import (
 	"errors"
 	jwtTokens "eventix/pkg/jwt"
 	pb "eventix/proto/auth/pb"
+	"eventix/services/auth/internal/authctx"
 	"eventix/services/auth/internal/models"
 	auth "eventix/services/auth/internal/service"
 	"fmt"
@@ -22,6 +23,35 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func TestAuthManager_Login_RepositoryAndPasswordFailures(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		user    models.User
+		repoErr error
+		code    codes.Code
+		message string
+	}{
+		{"unknown user", models.User{}, fmt.Errorf("load user: %w", sql.ErrNoRows), codes.Unauthenticated, "invalid credentials"},
+		{"invalid stored hash", models.User{Password: []byte{1, 2}}, nil, codes.Unauthenticated, "invalid credentials"},
+		{"database failure", models.User{}, errors.New("database unavailable"), codes.Internal, "failed to log in"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &MockRepository{MockGetUserByEmail: func(context.Context, string) (models.User, error) {
+				return tt.user, tt.repoErr
+			}}
+			manager := auth.NewAuthManager(repo, slog.New(slog.DiscardHandler), "test-secret", time.Minute, time.Hour)
+
+			resp, err := manager.Login(context.Background(), &pb.LoginRequest{
+				Email: "test@example.com", Password: "wrongpassword123",
+			})
+			require.Error(t, err)
+			assert.Nil(t, resp)
+			assert.Equal(t, tt.code, status.Code(err))
+			assert.Equal(t, tt.message, status.Convert(err).Message())
+		})
+	}
+}
 
 type MockRepository struct {
 	MockCreateUser          func(ctx context.Context, email string, name string, password []byte) (uuid.UUID, error)
@@ -263,7 +293,7 @@ func TestAuthManager_Login(t *testing.T) {
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Equal(t, codes.Unauthenticated, st.Code())
 		assert.Equal(t, "invalid credentials", st.Message())
 	})
 }
@@ -335,9 +365,11 @@ func TestAuthManager_Logout_Success(t *testing.T) {
 	userID := uuid.New()
 	tokenID := "test-token-id"
 	claims := &jwtTokens.RefreshClaims{
-		UserID:  userID.String(),
-		TokenID: tokenID,
+		TokenUse: "refresh",
+		UserID:   userID.String(),
+		TokenID:  tokenID,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "eventix",
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
@@ -370,9 +402,11 @@ func TestAuthManager_RefreshToken_Success(t *testing.T) {
 	tokenID := "test-token-id"
 
 	claims := &jwtTokens.RefreshClaims{
-		UserID:  userID.String(),
-		TokenID: tokenID,
+		TokenUse: "refresh",
+		UserID:   userID.String(),
+		TokenID:  tokenID,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "eventix",
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
@@ -413,9 +447,11 @@ func TestAuthManager_RefreshToken_RevokedToken(t *testing.T) {
 	tokenID := "test-token-id"
 
 	claims := &jwtTokens.RefreshClaims{
-		UserID:  userID.String(),
-		TokenID: tokenID,
+		TokenUse: "refresh",
+		UserID:   userID.String(),
+		TokenID:  tokenID,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "eventix",
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 		},
 	}
@@ -451,9 +487,10 @@ func TestAuthManager_ValidateToken(t *testing.T) {
 	email := "testuser@gmail.com"
 	role := "user"
 	claimsAccess := &jwtTokens.AccessClaims{
-		UserID: userID.String(),
-		Email:  email,
-		Role:   role,
+		TokenUse: "access",
+		UserID:   userID.String(),
+		Email:    email,
+		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -464,8 +501,9 @@ func TestAuthManager_ValidateToken(t *testing.T) {
 	accessToken, _ := token.SignedString([]byte("test-secret"))
 
 	claimsRefresh := &jwtTokens.RefreshClaims{
-		UserID:  userID.String(),
-		TokenID: tokenID,
+		TokenUse: "refresh",
+		UserID:   userID.String(),
+		TokenID:  tokenID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -569,10 +607,12 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 
 	t.Run("InvalidAccessToken_WrongIDFormat", func(t *testing.T) {
 		claimsAccess := &jwtTokens.AccessClaims{
-			UserID: userID,
-			Email:  email,
-			Role:   role,
+			TokenUse: "access",
+			UserID:   userID,
+			Email:    email,
+			Role:     role,
 			RegisteredClaims: jwt.RegisteredClaims{
+				Issuer:    "eventix",
 				ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
 			},
 		}
@@ -595,8 +635,10 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 
 	t.Run("InvalidAccessToken_NoEmailAndRole", func(t *testing.T) {
 		claimsAccess := &jwtTokens.AccessClaims{
-			UserID: userID,
+			TokenUse: "access",
+			UserID:   uuid.NewString(),
 			RegisteredClaims: jwt.RegisteredClaims{
+				Issuer:    "eventix",
 				ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
 			},
 		}
@@ -619,9 +661,11 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 
 	t.Run("InvalidRefreshToken_WrongIDFormat", func(t *testing.T) {
 		claimsRefresh := &jwtTokens.RefreshClaims{
-			UserID:  userID,
-			TokenID: tokenID,
+			TokenUse: "refresh",
+			UserID:   userID,
+			TokenID:  tokenID,
 			RegisteredClaims: jwt.RegisteredClaims{
+				Issuer:    "eventix",
 				ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			},
 		}
@@ -644,9 +688,11 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 
 	t.Run("InvalidRefreshToken_RevokeToken", func(t *testing.T) {
 		claimsRefresh := &jwtTokens.RefreshClaims{
-			UserID:  uuid.NewString(),
-			TokenID: tokenID,
+			TokenUse: "refresh",
+			UserID:   uuid.NewString(),
+			TokenID:  tokenID,
 			RegisteredClaims: jwt.RegisteredClaims{
+				Issuer:    "eventix",
 				ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			},
 		}
@@ -683,9 +729,11 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 		ctx := context.Background()
 
 		claimsRefresh := &jwtTokens.RefreshClaims{
-			UserID:  uuid.NewString(),
-			TokenID: tokenID,
+			TokenUse: "refresh",
+			UserID:   uuid.NewString(),
+			TokenID:  tokenID,
 			RegisteredClaims: jwt.RegisteredClaims{
+				Issuer:    "eventix",
 				ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			},
 		}
@@ -724,10 +772,11 @@ func TestAuthManager_ValidateTokenErrors(t *testing.T) {
 }
 
 func TestAuthManager_GetMe_Success(t *testing.T) {
+	userID := uuid.New()
 	mockRepo := &MockRepository{
-		MockGetUserByID: func(ctx context.Context, userID uuid.UUID) (models.User, error) {
+		MockGetUserByID: func(ctx context.Context, id uuid.UUID) (models.User, error) {
 			return models.User{
-				ID:        userID,
+				ID:        id,
 				Email:     "example@tt.com",
 				Name:      "user",
 				Role:      "user",
@@ -739,15 +788,12 @@ func TestAuthManager_GetMe_Success(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
-	req := &pb.GetMeRequest{
-		UserId: uuid.New().String(),
-	}
-
-	resp, err := manager.GetMe(context.Background(), req)
+	ctx := authctx.WithUserID(context.Background(), userID)
+	resp, err := manager.GetMe(ctx, &pb.GetMeRequest{})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
-	assert.NotEmpty(t, resp.UserId)
+	assert.Equal(t, userID.String(), resp.UserId)
 	assert.Equal(t, "example@tt.com", resp.Email)
 	assert.Equal(t, "user", resp.Name)
 	assert.Equal(t, "user", resp.Role)
@@ -756,7 +802,7 @@ func TestAuthManager_GetMe_Success(t *testing.T) {
 
 func TestAuthManager_GetMe_Error(t *testing.T) {
 	mockRepo := &MockRepository{
-		MockGetUserByID: func(ctx context.Context, userID uuid.UUID) (models.User, error) {
+		MockGetUserByID: func(ctx context.Context, id uuid.UUID) (models.User, error) {
 			return models.User{}, errors.New("can't get user")
 		},
 	}
@@ -764,42 +810,22 @@ func TestAuthManager_GetMe_Error(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
-	t.Run("Empty userID", func(t *testing.T) {
-		req := &pb.GetMeRequest{
-			UserId: "",
-		}
+	t.Run("Unauthenticated", func(t *testing.T) {
+		manager := auth.NewAuthManager(&MockRepository{}, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
 
-		resp, err := manager.GetMe(context.Background(), req)
+		resp, err := manager.GetMe(context.Background(), &pb.GetMeRequest{})
 		require.Error(t, err)
-		require.Empty(t, resp)
+		require.Nil(t, resp)
 
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.InvalidArgument, st.Code())
-		assert.Equal(t, "user_id is required", st.Message())
-	})
-
-	t.Run("Invalid userID", func(t *testing.T) {
-		req := &pb.GetMeRequest{
-			UserId: "12455-fiudi-uuid",
-		}
-
-		resp, err := manager.GetMe(context.Background(), req)
-		require.Error(t, err)
-		require.Empty(t, resp)
-
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.Internal, st.Code())
-		assert.Equal(t, "invalid user id", st.Message())
+		assert.Equal(t, codes.Unauthenticated, st.Code())
+		assert.Equal(t, "authentication required", st.Message())
 	})
 
 	t.Run("DBError_InternalError", func(t *testing.T) {
-		req := &pb.GetMeRequest{
-			UserId: uuid.New().String(),
-		}
-
-		resp, err := manager.GetMe(context.Background(), req)
+		ctx := authctx.WithUserID(context.Background(), uuid.New())
+		resp, err := manager.GetMe(ctx, &pb.GetMeRequest{})
 		require.Error(t, err)
 		require.Empty(t, resp)
 
@@ -811,18 +837,15 @@ func TestAuthManager_GetMe_Error(t *testing.T) {
 
 	t.Run("DBError_UserNotFound", func(t *testing.T) {
 		mockRepo := &MockRepository{
-			MockGetUserByID: func(ctx context.Context, userID uuid.UUID) (models.User, error) {
+			MockGetUserByID: func(ctx context.Context, id uuid.UUID) (models.User, error) {
 				return models.User{}, sql.ErrNoRows
 			},
 		}
 
 		logger := slog.New(slog.DiscardHandler)
 		manager := auth.NewAuthManager(mockRepo, logger, "test-secret", 15*time.Minute, 7*24*time.Hour)
-		req := &pb.GetMeRequest{
-			UserId: uuid.New().String(),
-		}
-
-		resp, err := manager.GetMe(context.Background(), req)
+		ctx := authctx.WithUserID(context.Background(), uuid.New())
+		resp, err := manager.GetMe(ctx, &pb.GetMeRequest{})
 		require.Error(t, err)
 		require.Empty(t, resp)
 
