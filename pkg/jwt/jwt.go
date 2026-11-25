@@ -2,6 +2,7 @@ package jwtTokens
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -17,23 +18,26 @@ func NewJwtToken(secret string) (*JwtToken, error) {
 }
 
 type AccessClaims struct {
-	UserID string
-	Email  string
-	Role   string
+	UserID   string
+	Email    string
+	Role     string
+	TokenUse string
 	jwt.RegisteredClaims
 }
 
 type RefreshClaims struct {
-	UserID  string
-	TokenID string
+	UserID   string
+	TokenID  string
+	TokenUse string
 	jwt.RegisteredClaims
 }
 
 func CreateAccessToken(userID uuid.UUID, email string, role string, secret string, tokenExpTime time.Duration) (string, error) {
 	claims := &AccessClaims{
-		UserID: userID.String(),
-		Email:  email,
-		Role:   role,
+		UserID:   userID.String(),
+		Email:    email,
+		Role:     role,
+		TokenUse: "access",
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tokenExpTime)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -46,8 +50,9 @@ func CreateAccessToken(userID uuid.UUID, email string, role string, secret strin
 
 func CreateRefreshToken(userID uuid.UUID, tokenID string, secret string, tokenExpTime time.Duration) (string, error) {
 	claims := &RefreshClaims{
-		UserID:  userID.String(),
-		TokenID: tokenID,
+		UserID:   userID.String(),
+		TokenID:  tokenID,
+		TokenUse: "refresh",
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tokenExpTime)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -59,55 +64,53 @@ func CreateRefreshToken(userID uuid.UUID, tokenID string, secret string, tokenEx
 	return token.SignedString([]byte(secret))
 }
 
-func ValidateAccessToken(accessToken string, secret string) (*AccessClaims, error) {
-	token, err := jwt.ParseWithClaims(accessToken, &AccessClaims{}, func(token *jwt.Token) (interface{}, error) {
-		return []byte(secret), nil
-	})
+func parseToken(raw, secret string, claims jwt.Claims) error {
+	if secret == "" {
+		return fmt.Errorf("JWT secret is required")
+	}
 
+	token, err := jwt.ParseWithClaims(
+		raw,
+		claims,
+		func(_ *jwt.Token) (any, error) {
+			return []byte(secret), nil
+		},
+		jwt.WithValidMethods([]string{"HS256"}),
+		jwt.WithIssuer("eventix"),
+		jwt.WithExpirationRequired(),
+	)
 	if err != nil {
+		return err
+	}
+	if !token.Valid {
+		return jwt.ErrTokenInvalidClaims
+	}
+	return nil
+}
+
+func ValidateAccessToken(accessToken string, secret string) (*AccessClaims, error) {
+	claims := &AccessClaims{}
+	if err := parseToken(accessToken, secret, claims); err != nil {
 		return nil, err
 	}
 
-	claims, ok := token.Claims.(*AccessClaims)
-	if !ok || !token.Valid {
+	id, err := uuid.Parse(claims.UserID)
+	if err != nil || id == uuid.Nil || claims.TokenUse != "access" || claims.Email == "" || claims.Role == "" {
 		return nil, jwt.ErrTokenInvalidClaims
-	}
-
-	if claims.Email == "" || claims.Role == "" {
-		return nil, fmt.Errorf("invalid access token: missing required claims")
-	}
-
-	if claims.UserID == "" {
-		return nil, fmt.Errorf("invalid access token: missing user_id")
-	}
-
-	if _, err := uuid.Parse(claims.UserID); err != nil {
-		return nil, fmt.Errorf("invalid access token: invalid user_id format")
 	}
 
 	return claims, nil
 }
 
 func ValidateRefreshToken(refreshToken string, secret string) (*RefreshClaims, error) {
-	token, err := jwt.ParseWithClaims(refreshToken, &RefreshClaims{}, func(token *jwt.Token) (interface{}, error) {
-		return []byte(secret), nil
-	})
-
-	if err != nil {
+	claims := &RefreshClaims{}
+	if err := parseToken(refreshToken, secret, claims); err != nil {
 		return nil, err
 	}
 
-	claims, ok := token.Claims.(*RefreshClaims)
-	if !ok || !token.Valid {
+	id, err := uuid.Parse(claims.UserID)
+	if err != nil || id == uuid.Nil || claims.TokenUse != "refresh" || strings.TrimSpace(claims.TokenID) == "" {
 		return nil, jwt.ErrTokenInvalidClaims
-	}
-
-	if claims.UserID == "" {
-		return nil, fmt.Errorf("invalid refresh token: missing user_id")
-	}
-
-	if _, err := uuid.Parse(claims.UserID); err != nil {
-		return nil, fmt.Errorf("invalid refresh token: invalid user_id format")
 	}
 
 	return claims, nil

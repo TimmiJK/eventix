@@ -26,16 +26,16 @@ proto-%:
 		proto/$*/$*.proto
 
 migrate-up:
-	migrate -path migrations -database "postgresql://${DB_NAME}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable" up
+	migrate -path migrations -database "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable" up
 
 migrate-down:
-	migrate -path migrations -database "postgresql://${DB_NAME}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable" down 1
+	migrate -path migrations -database "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable" down 1
 
 migrate-up-test:
-	migrate -path migrations -database "postgresql://${DB_NAME_TEST}:${DB_PASSWORD_TEST}@${DB_HOST_TEST}:${DB_PORT_TEST}/${DB_NAME_TEST}?sslmode=disable" up
+	migrate -path migrations -database "postgresql://${DB_USER_TEST}:${DB_PASSWORD_TEST}@${DB_HOST_TEST}:${DB_PORT_TEST}/${DB_NAME_TEST}?sslmode=disable" up
 
 migrate-down-test:
-	migrate -path migrations -database "postgresql://${DB_NAME_TEST}:${DB_PASSWORD_TEST}@${DB_HOST_TEST}:${DB_PORT_TEST}/${DB_NAME_TEST}?sslmode=disable" down 1
+	migrate -path migrations -database "postgresql://${DB_USER_TEST}:${DB_PASSWORD_TEST}@${DB_HOST_TEST}:${DB_PORT_TEST}/${DB_NAME_TEST}?sslmode=disable" down 1
 
 migrate-create:
 	@test -n "$(NAME)" || (echo "Ошибка: укажи NAME=название" && exit 1)
@@ -62,3 +62,7 @@ run-%:
 
 run-gateway:
 	go run gateway/cmd/main.go
+
+generate-graphql:
+	cd gateway && \
+	go run github.com/99designs/gqlgen generate
