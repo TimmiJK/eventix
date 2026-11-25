@@ -11,6 +11,11 @@ import (
 	authPb "eventix/proto/auth/pb"
 	catalogPb "eventix/proto/catalog/pb"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // Register is the resolver for the register field.
@@ -70,18 +75,48 @@ func (r *mutationResolver) Logout(ctx context.Context, refreshToken string) (boo
 	return grpcResp.Success, nil
 }
 
+// RefreshToken is the resolver for the refreshToken field.
+func (r *mutationResolver) RefreshToken(ctx context.Context, input model.RefreshTokenInput) (*model.RefreshTokenPayload, error) {
+	resp, err := r.Clients.Auth.RefreshToken(ctx, &authPb.RefreshTokenRequest{RefreshToken: input.RefreshToken})
+	if err != nil {
+		return nil, handleGRPCError(err)
+	}
+
+	return &model.RefreshTokenPayload{
+		AccessToken: resp.AccessToken,
+		ExpiresIn:   int32(resp.ExpiresIn),
+	}, nil
+}
+
 // CreateEvent is the resolver for the createEvent field.
 func (r *mutationResolver) CreateEvent(ctx context.Context, input model.CreateEventInput) (*model.Event, error) {
+	accessToken, ok := ctx.Value("accessTokenKey").(string)
+	if !ok || accessToken == "" {
+		return nil, handleGRPCError(status.Error(codes.Unauthenticated, "authentication required"))
+	}
+
+	grpcCtx := metadata.AppendToOutgoingContext(
+		ctx,
+		"authorization",
+		"Bearer "+accessToken,
+	)
+
+	description := ""
+	if input.Description != nil {
+		description = *input.Description
+	}
+
 	grpcReq := catalogPb.CreateEventRequest{
 		Title:       input.Title,
-		Description: *input.Description,
+		Description: description,
 		Venue:       input.Venue,
 		EventDate:   input.EventDate.Format(time.RFC3339),
 		TotalSeats:  input.TotalSeats,
-		Price:       input.Price,
+		PriceMinor:  input.PriceMinor,
+		Currency:    input.Currency,
 	}
 
-	grpcResp, err := r.Clients.Catalog.CreateEvent(ctx, &grpcReq)
+	grpcResp, err := r.Clients.Catalog.CreateEvent(grpcCtx, &grpcReq)
 	if err != nil {
 		return nil, handleGRPCError(err)
 	}
@@ -99,57 +134,114 @@ func (r *mutationResolver) CreateEvent(ctx context.Context, input model.CreateEv
 		EventDate:      parseDate,
 		TotalSeats:     grpcResp.Event.TotalSeats,
 		AvailableSeats: grpcResp.Event.AvailableSeats,
-		Price:          grpcResp.Event.Price,
+		PriceMinor:     grpcResp.Event.PriceMinor,
+		Currency:       grpcResp.Event.Currency,
+		Version:        grpcResp.Event.Version,
 	}, nil
 }
 
 // UpdateEvent is the resolver for the updateEvent field.
 func (r *mutationResolver) UpdateEvent(ctx context.Context, id string, input model.UpdateEventInput) (*model.Event, error) {
-	cur, err := r.Clients.Catalog.GetEvent(ctx, &catalogPb.GetEventRequest{EventId: id})
-	if err != nil {
-		return nil, handleGRPCError(err)
+	accessToken, ok := ctx.Value("accessTokenKey").(string)
+	if !ok || accessToken == "" {
+		return nil, handleGRPCError(status.Error(codes.Unauthenticated, "authentication required"))
 	}
 
-	grpcReq := catalogPb.UpdateEventRequest{
-		EventId:     id,
-		Title:       cur.Event.Title,
-		Description: cur.Event.Description,
-		Venue:       cur.Event.Venue,
-		EventDate:   cur.Event.EventDate,
-		TotalSeats:  cur.Event.TotalSeats,
-		Price:       cur.Event.Price,
+	grpcCtx := metadata.AppendToOutgoingContext(
+		ctx,
+		"authorization",
+		"Bearer "+accessToken,
+	)
+
+	grpcReq := &catalogPb.UpdateEventRequest{
+		EventId:         id,
+		ExpectedVersion: input.ExpectedVersion,
+		UpdateMask:      &fieldmaskpb.FieldMask{},
 	}
 
-	for _, field := range input.UpdateMask {
-		switch field {
-		case "title":
-			if input.Title != nil {
-				grpcReq.Title = *input.Title
-			}
-		case "description":
-			if input.Description != nil {
-				grpcReq.Description = *input.Description
-			}
-		case "venue":
-			if input.Venue != nil {
-				grpcReq.Venue = *input.Venue
-			}
-		case "eventDate":
-			if input.EventDate != nil {
-				grpcReq.EventDate = input.EventDate.String()
-			}
-		case "totalSeats":
-			if input.TotalSeats != nil {
-				grpcReq.TotalSeats = int32(*input.TotalSeats)
-			}
-		case "price":
-			if input.Price != nil {
-				grpcReq.Price = *input.Price
-			}
+	fields := input.UpdateMask
+	if fields == nil {
+		if input.Title != nil {
+			fields = append(fields, "title")
+		}
+		if input.Description != nil {
+			fields = append(fields, "description")
+		}
+		if input.Venue != nil {
+			fields = append(fields, "venue")
+		}
+		if input.EventDate != nil {
+			fields = append(fields, "eventDate")
+		}
+		if input.TotalSeats != nil {
+			fields = append(fields, "totalSeats")
+		}
+		if input.PriceMinor != nil {
+			fields = append(fields, "priceMinor")
+		}
+		if input.Currency != nil {
+			fields = append(fields, "currency")
 		}
 	}
 
-	grpcResp, err := r.Clients.Catalog.UpdateEvent(ctx, &grpcReq)
+	if len(fields) == 0 {
+		return nil, handleGRPCError(status.Error(codes.InvalidArgument, "no fields to update"))
+	}
+
+	missingValue := func(field model.EventField) error {
+		return handleGRPCError(status.Errorf(codes.InvalidArgument, "value required for %s", field))
+	}
+
+	for _, field := range fields {
+		path := string(field)
+
+		switch field {
+		case "title":
+			if input.Title == nil {
+				return nil, missingValue(field)
+			}
+			grpcReq.Title = *input.Title
+		case "description":
+			if input.Description == nil {
+				return nil, missingValue(field)
+			}
+			grpcReq.Description = *input.Description
+		case "venue":
+			if input.Venue == nil {
+				return nil, missingValue(field)
+			}
+			grpcReq.Venue = *input.Venue
+		case "eventDate":
+			if input.EventDate == nil {
+				return nil, missingValue(field)
+			}
+			grpcReq.EventDate = input.EventDate.Format(time.RFC3339)
+			path = "event_date"
+		case "totalSeats":
+			if input.TotalSeats == nil {
+				return nil, missingValue(field)
+			}
+			grpcReq.TotalSeats = *input.TotalSeats
+			path = "total_seats"
+		case "priceMinor":
+			if input.PriceMinor == nil {
+				return nil, missingValue(field)
+			}
+			grpcReq.PriceMinor = *input.PriceMinor
+			path = "price_minor"
+		case "currency":
+			if input.Currency == nil {
+				return nil, missingValue(field)
+			}
+			grpcReq.Currency = *input.Currency
+		default:
+			return nil, handleGRPCError(status.Errorf(codes.InvalidArgument, "unknown update field %s", field))
+		}
+
+		grpcReq.UpdateMask.Paths = append(grpcReq.UpdateMask.Paths, path)
+	}
+
+	grpcResp, err := r.Clients.Catalog.UpdateEvent(grpcCtx, grpcReq)
 	if err != nil {
 		return nil, handleGRPCError(err)
 	}
@@ -167,17 +259,31 @@ func (r *mutationResolver) UpdateEvent(ctx context.Context, id string, input mod
 		EventDate:      parseDate,
 		TotalSeats:     grpcResp.Event.TotalSeats,
 		AvailableSeats: grpcResp.Event.AvailableSeats,
-		Price:          grpcResp.Event.Price,
+		PriceMinor:     grpcResp.Event.PriceMinor,
+		Currency:       grpcResp.Event.Currency,
+		Version:        grpcResp.Event.Version,
 	}, nil
 }
 
 // DeleteEvent is the resolver for the deleteEvent field.
-func (r *mutationResolver) DeleteEvent(ctx context.Context, id string) (bool, error) {
-	grpcReq := catalogPb.DeleteEventRequest{
-		EventId: id,
+func (r *mutationResolver) DeleteEvent(ctx context.Context, id string, expectedVersion int64) (bool, error) {
+	accessToken, ok := ctx.Value("accessTokenKey").(string)
+	if !ok || accessToken == "" {
+		return false, handleGRPCError(status.Error(codes.Unauthenticated, "authentication required"))
 	}
 
-	grpcResp, err := r.Clients.Catalog.DeleteEvent(ctx, &grpcReq)
+	grpcCtx := metadata.AppendToOutgoingContext(
+		ctx,
+		"authorization",
+		"Bearer "+accessToken,
+	)
+
+	grpcReq := catalogPb.DeleteEventRequest{
+		EventId:         id,
+		ExpectedVersion: expectedVersion,
+	}
+
+	grpcResp, err := r.Clients.Catalog.DeleteEvent(grpcCtx, &grpcReq)
 	if err != nil {
 		return false, handleGRPCError(err)
 	}
@@ -209,16 +315,23 @@ func (r *queryResolver) GetEvent(ctx context.Context, id string) (*model.Event, 
 		EventDate:      parseDate,
 		TotalSeats:     grpcResp.Event.TotalSeats,
 		AvailableSeats: grpcResp.Event.AvailableSeats,
-		Price:          grpcResp.Event.Price,
+		PriceMinor:     grpcResp.Event.PriceMinor,
+		Currency:       grpcResp.Event.Currency,
+		Version:        grpcResp.Event.Version,
 	}, nil
 }
 
 // ListEvents is the resolver for the listEvents field.
 func (r *queryResolver) ListEvents(ctx context.Context, input model.ListEventsInput) (*model.EventList, error) {
+	searchQuery := ""
+	if input.SearchQuery != nil {
+		searchQuery = *input.SearchQuery
+	}
+
 	grpcReq := catalogPb.ListEventsRequest{
 		Page:        input.Page,
 		PageSize:    input.PageSize,
-		SearchQuery: *input.SearchQuery,
+		SearchQuery: searchQuery,
 	}
 
 	grpcResp, err := r.Clients.Catalog.ListEvents(ctx, &grpcReq)
@@ -240,7 +353,9 @@ func (r *queryResolver) ListEvents(ctx context.Context, input model.ListEventsIn
 			EventDate:      parseDate,
 			TotalSeats:     event.TotalSeats,
 			AvailableSeats: event.AvailableSeats,
-			Price:          event.Price,
+			PriceMinor:     event.PriceMinor,
+			Currency:       event.Currency,
+			Version:        event.Version,
 		}
 	}
 
@@ -249,6 +364,34 @@ func (r *queryResolver) ListEvents(ctx context.Context, input model.ListEventsIn
 		TotalCount: grpcResp.TotalCount,
 		Page:       grpcResp.Page,
 		PageSize:   grpcResp.PageSize,
+	}, nil
+}
+
+// GetMe is the resolver for the getMe field.
+func (r *queryResolver) GetMe(ctx context.Context) (*model.GetMePayload, error) {
+	accessToken, ok := ctx.Value("accessTokenKey").(string)
+	if !ok || accessToken == "" {
+		return nil, handleGRPCError(status.Error(codes.Unauthenticated, "authentication required"))
+	}
+
+	grpcCtx := metadata.AppendToOutgoingContext(
+		ctx,
+		"authorization",
+		"Bearer "+accessToken,
+	)
+
+	grpcReq := authPb.GetMeRequest{}
+	grpcResp, err := r.Clients.Auth.GetMe(grpcCtx, &grpcReq)
+	if err != nil {
+		return nil, handleGRPCError(err)
+	}
+
+	return &model.GetMePayload{
+		UserID:    grpcResp.UserId,
+		Email:     grpcResp.Email,
+		Name:      grpcResp.Name,
+		Role:      grpcResp.Role,
+		CreatedAt: grpcResp.CreatedAt,
 	}, nil
 }
 

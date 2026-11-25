@@ -43,6 +43,12 @@ func MapGRPCToGraphQLError(err error) *gqlerror.Error {
 	case codes.Internal:
 		code = "INTERNAL"
 		message = "Internal server error"
+	case codes.Aborted:
+		code = "CONFLICT"
+		message = st.Message()
+	case codes.FailedPrecondition:
+		code = "FAILED_PRECONDITION"
+		message = st.Message()
 	default:
 		code = "UNKNOWN"
 		message = st.Message()
